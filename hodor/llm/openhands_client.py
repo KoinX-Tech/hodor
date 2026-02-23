@@ -177,7 +177,10 @@ def _respect_encrypted_reasoning_flag(llm: Any, options: dict[str, Any]) -> None
         options.pop("include", None)
 
 
-# Patch OpenHands Responses options at import time so the disable flag is honored
+# Patch OpenHands Responses options at import time so the disable flag is honored.
+# Defence-in-depth: hodor sets enable_encrypted_reasoning=False on the LLM config,
+# so the SDK won't add encrypted reasoning to `include`. This patch catches any
+# edge case where the flag leaks through.
 try:  # pragma: no cover - OpenHands may be unavailable in some environments
     from openhands.sdk.llm.options import responses_options as _responses_options
 except Exception:  # pragma: no cover - dependency missing
@@ -193,6 +196,40 @@ else:
 
         _responses_options.select_responses_options = _hodor_select_responses_options
         _responses_options._hodor_responses_patched = True
+
+# Patch Message.from_llm_responses_output to discard reasoning items at parse time.
+#
+# The SDK stores reasoning items (with server-side IDs) from each API response and
+# replays them on subsequent turns via to_responses_dict(). With store=False (the
+# SDK default for agent calls), those IDs aren't persisted, causing:
+#   "Item with id 'rs_...' not found. Items are not persisted when
+#    `store` is set to false."
+# Even with store=True, the serialization format triggers:
+#   "Item of type 'reasoning' was provided without its required following item."
+#
+# By nulling out responses_reasoning_item at parse time, the reasoning chain is
+# never stored on the Message and to_responses_dict() naturally skips it. The model
+# reasons fresh each turn from the full conversation context (user messages, tool
+# calls, tool results).
+#
+# Upstream fix: https://github.com/OpenHands/software-agent-sdk/pull/2178
+try:  # pragma: no cover
+    from openhands.sdk.llm.message import Message as _Message
+except Exception:  # pragma: no cover
+    pass
+else:
+    if not getattr(_Message, "_hodor_reasoning_strip_patched", False):
+        _original_from_llm_responses_output = _Message.from_llm_responses_output
+
+        @classmethod  # type: ignore[misc]
+        def _hodor_from_llm_responses_output(cls, output, **kwargs):
+            msg = _original_from_llm_responses_output.__func__(cls, output, **kwargs)
+            # Discard reasoning item so it's never replayed on subsequent turns
+            msg.responses_reasoning_item = None
+            return msg
+
+        _Message.from_llm_responses_output = _hodor_from_llm_responses_output
+        _Message._hodor_reasoning_strip_patched = True
 
 
 # Ordered from most specific → least specific so substring matches work reliably.

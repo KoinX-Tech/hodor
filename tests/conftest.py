@@ -6,10 +6,22 @@ from unittest.mock import MagicMock
 
 
 def _install_openhands_stub():
-    """Provide lightweight stubs for OpenHands SDK modules so tests don't need real deps."""
+    """Provide lightweight stubs for OpenHands SDK modules so tests don't need real deps.
 
+    Only installs stubs when the real SDK is not available.  When the real SDK
+    is installed, the actual modules are used instead.
+    """
     if "openhands" in sys.modules:
         return
+
+    # Check if the real SDK is installed before falling back to stubs
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("openhands.sdk") is not None:
+            return
+    except (ImportError, ModuleNotFoundError, ValueError):
+        pass
 
     # Create mock modules
     openhands_module = types.ModuleType("openhands")

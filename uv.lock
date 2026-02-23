@@ -1192,8 +1192,8 @@ requires-dist = [
     { name = "ipython", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "lizard", specifier = ">=1.17.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.5.0" },
-    { name = "openhands-sdk", git = "https://github.com/OpenHands/software-agent-sdk.git?subdirectory=openhands-sdk&rev=v1.8.1" },
-    { name = "openhands-tools", git = "https://github.com/OpenHands/software-agent-sdk.git?subdirectory=openhands-tools&rev=v1.8.1" },
+    { name = "openhands-sdk", git = "https://github.com/OpenHands/software-agent-sdk.git?subdirectory=openhands-sdk&rev=v1.11.5" },
+    { name = "openhands-tools", git = "https://github.com/OpenHands/software-agent-sdk.git?subdirectory=openhands-tools&rev=v1.11.5" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
@@ -2084,11 +2084,12 @@ wheels = [
 
 [[package]]
 name = "openhands-sdk"
-version = "1.8.1"
-source = { git = "https://github.com/OpenHands/software-agent-sdk.git?subdirectory=openhands-sdk&rev=v1.8.1#7c91cbe20ccc11789f0c9510025b8ef39ded69bd" }
+version = "1.11.5"
+source = { git = "https://github.com/OpenHands/software-agent-sdk.git?subdirectory=openhands-sdk&rev=v1.11.5#010e8473df1e93761c791fd29ae8c7369e916556" }
 dependencies = [
     { name = "deprecation" },
     { name = "fastmcp" },
+    { name = "filelock" },
     { name = "httpx" },
     { name = "litellm" },
     { name = "lmnr" },
@@ -2101,8 +2102,8 @@ dependencies = [
 
 [[package]]
 name = "openhands-tools"
-version = "1.8.1"
-source = { git = "https://github.com/OpenHands/software-agent-sdk.git?subdirectory=openhands-tools&rev=v1.8.1#7c91cbe20ccc11789f0c9510025b8ef39ded69bd" }
+version = "1.11.5"
+source = { git = "https://github.com/OpenHands/software-agent-sdk.git?subdirectory=openhands-tools&rev=v1.11.5#010e8473df1e93761c791fd29ae8c7369e916556" }
 dependencies = [
     { name = "bashlex" },
     { name = "binaryornot" },
