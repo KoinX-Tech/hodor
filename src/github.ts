@@ -1,5 +1,4 @@
-import { exec, execJson } from "./utils/exec.js";
-import { logger } from "./utils/logger.js";
+import { execJson } from "./utils/exec.js";
 import type { MrMetadata, NoteEntry } from "./types.js";
 
 export class GitHubAPIError extends Error {

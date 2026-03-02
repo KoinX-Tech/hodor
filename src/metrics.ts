@@ -33,13 +33,15 @@ export function formatMetricsMarkdown(metrics: ReviewMetrics): string {
   return lines.join("\n");
 }
 
-export function printMetrics(metrics: ReviewMetrics): void {
+export function printMetrics(metrics: ReviewMetrics, stream: NodeJS.WritableStream = process.stderr): void {
   const dim = chalk.dim;
   const bold = chalk.bold;
   const cyan = chalk.cyan;
 
-  console.log();
-  console.log(dim("─".repeat(50)));
+  const write = (line: string) => stream.write(line + "\n");
+
+  write("");
+  write(dim("─".repeat(50)));
 
   // Tokens
   let tokenLine = `${dim("Tokens:")}  ${bold(tok(metrics.inputTokens))} in`;
@@ -50,17 +52,17 @@ export function printMetrics(metrics: ReviewMetrics): void {
   }
   tokenLine += `  ${bold(tok(metrics.outputTokens))} out`;
   tokenLine += dim(`  (${tok(metrics.totalTokens)} total)`);
-  console.log(tokenLine);
+  write(tokenLine);
 
   // Agent work
-  console.log(
+  write(
     `${dim("Agent:")}   ${bold(String(metrics.turns))} turns  ${bold(String(metrics.toolCalls))} tool calls  ${cyan(formatDuration(metrics.durationSeconds))}`,
   );
 
   // Cost
   if (metrics.cost > 0) {
-    console.log(`${dim("Cost:")}    ${bold("$" + metrics.cost.toFixed(4))}`);
+    write(`${dim("Cost:")}    ${bold("$" + metrics.cost.toFixed(4))}`);
   }
 
-  console.log(dim("─".repeat(50)));
+  write(dim("─".repeat(50)));
 }

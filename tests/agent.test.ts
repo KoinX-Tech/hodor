@@ -21,6 +21,12 @@ describe("detectPlatform", () => {
   ] as const)("detects platform for %s", (url, expected) => {
     expect(detectPlatform(url)).toBe(expected);
   });
+
+  it("throws on unrecognized platform", () => {
+    expect(() => detectPlatform("https://bitbucket.org/foo/bar/pull-requests/1")).toThrow(
+      /Cannot detect platform/,
+    );
+  });
 });
 
 describe("parsePrUrl", () => {
@@ -44,6 +50,18 @@ describe("parsePrUrl", () => {
 
   it("throws on invalid URL", () => {
     expect(() => parsePrUrl("https://gitlab.com/foo/bar/issues/1")).toThrow();
+  });
+
+  it("throws on non-numeric PR number", () => {
+    expect(() => parsePrUrl("https://github.com/foo/bar/pull/abc")).toThrow(
+      /Invalid PR number/,
+    );
+  });
+
+  it("throws on non-numeric MR number", () => {
+    expect(() =>
+      parsePrUrl("https://gitlab.com/foo/bar/-/merge_requests/xyz"),
+    ).toThrow(/Invalid MR number/);
   });
 });
 

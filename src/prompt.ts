@@ -13,9 +13,6 @@ function getTemplatesDir(): string {
 
 export function buildPrReviewPrompt(opts: {
   prUrl: string;
-  owner: string;
-  repo: string;
-  prNumber: string;
   platform: Platform;
   targetBranch?: string;
   diffBaseSha?: string | null;
@@ -26,9 +23,6 @@ export function buildPrReviewPrompt(opts: {
 }): string {
   const {
     prUrl,
-    owner,
-    repo,
-    prNumber,
     platform,
     targetBranch = "main",
     diffBaseSha,
@@ -57,6 +51,15 @@ export function buildPrReviewPrompt(opts: {
     templateText = readFileSync(templateFile, "utf-8");
   } catch (err) {
     throw new Error(`Failed to load prompt template from ${templateFile}: ${err}`);
+  }
+
+  // Validate ref inputs to prevent shell injection via branch/SHA names
+  const safeRef = /^[a-zA-Z0-9_.\/\-]+$/;
+  if (!safeRef.test(targetBranch)) {
+    throw new Error(`Invalid target branch name: ${targetBranch}`);
+  }
+  if (diffBaseSha && !safeRef.test(diffBaseSha)) {
+    throw new Error(`Invalid diff base SHA: ${diffBaseSha}`);
   }
 
   // Prepare platform-specific commands

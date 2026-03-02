@@ -72,48 +72,10 @@ program
       reasoningEffort = "high";
     }
 
-    // Check platform and token availability
-    const platform = detectPlatform(prUrl);
-    const githubToken = process.env.GITHUB_TOKEN;
-    const gitlabToken =
-      process.env.GITLAB_TOKEN ??
-      process.env.GITLAB_PRIVATE_TOKEN ??
-      process.env.CI_JOB_TOKEN;
+    // Use stderr for all non-review output so --json stdout stays machine-readable
+    const log = outputJson ? console.error : console.log;
 
-    if (platform === "github" && !githubToken) {
-      console.error(
-        chalk.yellow(
-          "Warning: GITHUB_TOKEN not set. You may encounter rate limits or authentication issues.",
-        ),
-      );
-      console.error(
-        chalk.dim("  Set GITHUB_TOKEN environment variable or run: gh auth login\n"),
-      );
-    } else if (platform === "gitlab" && !gitlabToken) {
-      console.error(
-        chalk.yellow(
-          "Warning: No GitLab token detected. Set GITLAB_TOKEN (api scope) for authentication.",
-        ),
-      );
-      console.error(
-        chalk.dim(
-          "  Export GITLAB_TOKEN and optionally GITLAB_HOST for self-hosted instances.\n",
-        ),
-      );
-    }
-
-    console.log(
-      `\n${chalk.bold.cyan("Hodor - AI Code Review Agent")}`,
-    );
-    console.log(chalk.dim(`Platform: ${platform.toUpperCase()}`));
-    console.log(chalk.dim(`PR URL: ${prUrl}`));
-    console.log(chalk.dim(`Model: ${model}`));
-    if (reasoningEffort) {
-      console.log(chalk.dim(`Reasoning Effort: ${reasoningEffort}`));
-    }
-    console.log();
-
-    const spinner = ora("Setting up workspace...").start();
+    const spinner = ora({ stream: outputJson ? process.stderr : process.stdout });
     const toolIcons: Record<string, string> = {
       bash: "terminal",
       read: "file",
@@ -157,6 +119,48 @@ program
     }
 
     try {
+      // Validate URL and detect platform (inside try so errors are caught)
+      const platform = detectPlatform(prUrl);
+      const githubToken = process.env.GITHUB_TOKEN;
+      const gitlabToken =
+        process.env.GITLAB_TOKEN ??
+        process.env.GITLAB_PRIVATE_TOKEN ??
+        process.env.CI_JOB_TOKEN;
+
+      if (platform === "github" && !githubToken) {
+        console.error(
+          chalk.yellow(
+            "Warning: GITHUB_TOKEN not set. You may encounter rate limits or authentication issues.",
+          ),
+        );
+        console.error(
+          chalk.dim("  Set GITHUB_TOKEN environment variable or run: gh auth login\n"),
+        );
+      } else if (platform === "gitlab" && !gitlabToken) {
+        console.error(
+          chalk.yellow(
+            "Warning: No GitLab token detected. Set GITLAB_TOKEN (api scope) for authentication.",
+          ),
+        );
+        console.error(
+          chalk.dim(
+            "  Export GITLAB_TOKEN and optionally GITLAB_HOST for self-hosted instances.\n",
+          ),
+        );
+      }
+
+      log(
+        `\n${chalk.bold.cyan("Hodor - AI Code Review Agent")}`,
+      );
+      log(chalk.dim(`Platform: ${platform.toUpperCase()}`));
+      log(chalk.dim(`PR URL: ${prUrl}`));
+      log(chalk.dim(`Model: ${model}`));
+      if (reasoningEffort) {
+        log(chalk.dim(`Reasoning Effort: ${reasoningEffort}`));
+      }
+      log();
+
+      spinner.start("Setting up workspace...");
       const { reviewText, metricsFooter } = await reviewPr({
         prUrl,
         model,
@@ -173,7 +177,7 @@ program
       spinner.succeed("Review complete!");
 
       if (post) {
-        console.log(chalk.cyan("\nPosting review to PR/MR..."));
+        log(chalk.cyan("\nPosting review to PR/MR..."));
 
         const result = await postReviewComment({
           prUrl,
@@ -183,20 +187,23 @@ program
         });
 
         if (result.success) {
-          console.log(chalk.bold.green("Review posted successfully!"));
-          console.log(chalk.dim(`  ${platform === "github" ? "PR" : "MR"}: ${prUrl}`));
+          log(chalk.bold.green("Review posted successfully!"));
+          log(chalk.dim(`  ${platform === "github" ? "PR" : "MR"}: ${prUrl}`));
         } else {
-          console.log(
+          log(
             chalk.bold.red(`Failed to post review: ${result.error}`),
           );
-          console.log(chalk.yellow("\nReview output:\n"));
+          log(chalk.yellow("\nReview output:\n"));
           console.log(reviewText);
         }
       } else {
-        console.log(chalk.bold.green("Review Complete\n"));
+        if (!outputJson) {
+          log(chalk.bold.green("Review Complete\n"));
+        }
+        // Review text always goes to stdout (the only stdout output in --json mode)
         console.log(reviewText);
         if (!outputJson) {
-          console.log(
+          log(
             chalk.dim(
               "\nTip: Use --post to automatically post this review to the PR/MR",
             ),

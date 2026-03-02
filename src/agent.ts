@@ -40,8 +40,9 @@ export function detectPlatform(prUrl: string): Platform {
   if (prUrl.includes("/pull/") || hostname.includes("github")) {
     return "github";
   }
-  logger.debug(`Unknown platform for URL ${prUrl}, defaulting to GitHub`);
-  return "github";
+  throw new Error(
+    `Cannot detect platform for URL: ${prUrl}. Expected a GitHub pull request (/pull/) or GitLab merge request (/-/merge_requests/) URL.`,
+  );
 }
 
 export function parsePrUrl(prUrl: string): ParsedPrUrl {
@@ -51,10 +52,14 @@ export function parsePrUrl(prUrl: string): ParsedPrUrl {
 
   // GitHub format: /owner/repo/pull/123
   if (pathParts.length >= 4 && pathParts[2] === "pull") {
+    const prNumber = parseInt(pathParts[3], 10);
+    if (!Number.isSafeInteger(prNumber) || prNumber <= 0) {
+      throw new Error(`Invalid PR number in URL: ${prUrl}. Expected a positive integer after /pull/.`);
+    }
     return {
       owner: pathParts[0],
       repo: pathParts[1],
-      prNumber: parseInt(pathParts[3], 10),
+      prNumber,
       host,
     };
   }
@@ -78,6 +83,9 @@ export function parsePrUrl(prUrl: string): ParsedPrUrl {
     const owner =
       ownerParts.length > 0 ? ownerParts.join("/") : pathParts[0];
     const prNumber = parseInt(pathParts[mrIndex + 1], 10);
+    if (!Number.isSafeInteger(prNumber) || prNumber <= 0) {
+      throw new Error(`Invalid MR number in URL: ${prUrl}. Expected a positive integer after /merge_requests/.`);
+    }
     return { owner, repo, prNumber, host };
   }
 
@@ -159,8 +167,12 @@ function tryLoadSkill(filePath: string, label: string): string | null {
       logger.info(`Found skill: ${label}`);
       return content;
     }
-  } catch {
-    // File doesn't exist or can't be read — skip silently
+  } catch (err: unknown) {
+    // ENOENT (file not found) is expected — skip silently
+    // Other errors (permission denied, encoding issues) should be logged
+    if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code !== "ENOENT") {
+      logger.warn(`Failed to read skill ${label}: ${err.message}`);
+    }
   }
   return null;
 }
@@ -241,6 +253,13 @@ export async function reviewPr(opts: {
       );
     }
   }
+
+  // Snapshot env vars we may mutate, restore in finally block
+  const envSnapshot: Record<string, string | undefined> = {
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    AWS_REGION: process.env.AWS_REGION,
+  };
 
   // Set API key in environment for pi-ai early so session creation can use it
   if (apiKey) {
@@ -344,9 +363,6 @@ export async function reviewPr(opts: {
     // Build prompt
     const prompt = buildPrReviewPrompt({
       prUrl,
-      owner,
-      repo,
-      prNumber: String(prNumber),
       platform,
       targetBranch,
       diffBaseSha,
@@ -519,6 +535,15 @@ export async function reviewPr(opts: {
 
     return { reviewText, metricsFooter };
   } finally {
+    // Restore mutated env vars
+    for (const [key, val] of Object.entries(envSnapshot)) {
+      if (val === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = val;
+      }
+    }
+
     if (cleanup && !workspaceDir) {
       logger.info("Cleaning up workspace...");
       await cleanupWorkspace(workspacePath);

@@ -13,13 +13,23 @@ export class WorkspaceError extends Error {
   }
 }
 
+export interface WorkspaceResult {
+  workspace: string;
+  targetBranch: string;
+  diffBaseSha: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// CI detection
+// ---------------------------------------------------------------------------
+
 interface CiWorkspace {
   path: string | null;
   targetBranch: string | null;
   diffBaseSha: string | null;
 }
 
-function detectCiWorkspace(owner: string, repo: string, prNumber: string): CiWorkspace {
+function detectCiWorkspace(owner: string, repo: string): CiWorkspace {
   // GitLab CI
   if (process.env.GITLAB_CI === "true") {
     const projectDir = process.env.CI_PROJECT_DIR;
@@ -54,6 +64,14 @@ function detectCiWorkspace(owner: string, repo: string, prNumber: string): CiWor
   return { path: null, targetBranch: null, diffBaseSha: null };
 }
 
+// ---------------------------------------------------------------------------
+// Repo identity check
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if workspace is already cloned from the expected owner/repo.
+ * Parses the remote URL to compare exact owner/repo, avoiding substring false positives.
+ */
 async function isSameRepo(
   workspace: string,
   owner: string,
@@ -61,17 +79,192 @@ async function isSameRepo(
 ): Promise<boolean> {
   try {
     const { stdout } = await exec("git", ["remote", "get-url", "origin"], { cwd: workspace });
-    return stdout.trim().includes(`${owner}/${repo}`);
+    const remoteUrl = stdout.trim();
+    // Normalize: extract path from HTTPS or SSH URLs
+    // HTTPS: https://host/owner/repo.git  SSH: git@host:owner/repo.git
+    const match = remoteUrl.match(/[/:]([\w.\-\/]+?)(?:\.git)?$/) ;
+    if (!match) return false;
+    const remotePath = match[1];
+    const expectedPath = `${owner}/${repo}`;
+    return remotePath === expectedPath || remotePath.endsWith(`/${expectedPath}`);
   } catch {
     return false;
   }
 }
 
-export interface WorkspaceResult {
-  workspace: string;
-  targetBranch: string;
-  diffBaseSha: string | null;
+// ---------------------------------------------------------------------------
+// GitHub helpers
+// ---------------------------------------------------------------------------
+
+async function getGithubBaseBranch(workspace: string, prNumber: string): Promise<string> {
+  try {
+    const prInfo = await execJson<Record<string, string>>(
+      "gh",
+      ["pr", "view", prNumber, "--json", "headRefName,baseRefName"],
+      { cwd: workspace },
+    );
+    const baseBranch = prInfo.baseRefName ?? "main";
+    logger.info(`Base branch: ${baseBranch}`);
+    return baseBranch;
+  } catch {
+    logger.warn("Could not fetch PR metadata for base branch detection");
+    return "main";
+  }
 }
+
+async function fetchAndCheckoutGithubPr(
+  workspace: string,
+  prNumber: string,
+): Promise<string> {
+  logger.info(`Fetching and checking out PR #${prNumber} in existing workspace`);
+  await exec("git", ["fetch", "origin"], { cwd: workspace });
+
+  try {
+    await exec("gh", ["pr", "checkout", prNumber], { cwd: workspace });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new WorkspaceError(`Failed to checkout PR #${prNumber}: ${msg}`);
+  }
+
+  return getGithubBaseBranch(workspace, prNumber);
+}
+
+async function cloneAndCheckoutGithubPr(
+  workspace: string,
+  owner: string,
+  repo: string,
+  prNumber: string,
+): Promise<string> {
+  logger.info(`Setting up GitHub workspace for ${owner}/${repo}/pull/${prNumber}`);
+
+  try {
+    await exec("gh", ["version"]);
+  } catch {
+    throw new WorkspaceError("GitHub CLI (gh) is not available. Install it: https://cli.github.com");
+  }
+
+  logger.info(`Cloning repository ${owner}/${repo}...`);
+  try {
+    await exec("gh", ["repo", "clone", `${owner}/${repo}`, workspace]);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new WorkspaceError(`Failed to clone repository ${owner}/${repo}: ${msg}`);
+  }
+
+  logger.info(`Checking out PR #${prNumber}...`);
+  try {
+    await exec("gh", ["pr", "checkout", prNumber], { cwd: workspace });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new WorkspaceError(`Failed to checkout PR #${prNumber}: ${msg}`);
+  }
+
+  return getGithubBaseBranch(workspace, prNumber);
+}
+
+// ---------------------------------------------------------------------------
+// GitLab helpers
+// ---------------------------------------------------------------------------
+
+async function getGitlabMrBranches(
+  owner: string,
+  repo: string,
+  prNumber: string,
+  host?: string,
+): Promise<{ sourceBranch: string; targetBranch: string }> {
+  const gitlabHost = host || process.env.GITLAB_HOST || "gitlab.com";
+  let mrInfo: MrMetadata;
+  try {
+    mrInfo = await fetchGitlabMrInfo(owner, repo, Number(prNumber), gitlabHost);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new WorkspaceError(`Failed to fetch MR info for !${prNumber}: ${msg}`);
+  }
+
+  const sourceBranch = mrInfo.source_branch;
+  if (!sourceBranch) {
+    throw new WorkspaceError(`Could not determine source branch for MR !${prNumber}`);
+  }
+
+  return { sourceBranch, targetBranch: mrInfo.target_branch ?? "main" };
+}
+
+async function checkoutGitlabBranch(workspace: string, sourceBranch: string): Promise<void> {
+  try {
+    await exec("git", ["checkout", "-b", sourceBranch, `origin/${sourceBranch}`], {
+      cwd: workspace,
+    });
+  } catch {
+    try {
+      await exec("git", ["checkout", sourceBranch], { cwd: workspace });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new WorkspaceError(`Failed to checkout MR branch '${sourceBranch}': ${msg}`);
+    }
+  }
+}
+
+async function fetchAndCheckoutGitlabMr(
+  workspace: string,
+  owner: string,
+  repo: string,
+  prNumber: string,
+  host?: string,
+): Promise<string> {
+  logger.info(`Fetching and checking out MR !${prNumber} in existing workspace`);
+  await exec("git", ["fetch", "origin"], { cwd: workspace });
+
+  const { sourceBranch, targetBranch } = await getGitlabMrBranches(owner, repo, prNumber, host);
+  logger.info(`Source branch: ${sourceBranch}, Target branch: ${targetBranch}`);
+  await checkoutGitlabBranch(workspace, sourceBranch);
+
+  return targetBranch;
+}
+
+async function cloneAndCheckoutGitlabMr(
+  workspace: string,
+  owner: string,
+  repo: string,
+  prNumber: string,
+  host?: string,
+): Promise<string> {
+  const gitlabHost = host || process.env.GITLAB_HOST || "gitlab.com";
+  logger.info(`Setting up GitLab workspace for ${owner}/${repo}/merge_requests/${prNumber}`);
+
+  try {
+    await exec("glab", ["version"]);
+  } catch {
+    throw new WorkspaceError(
+      "GitLab CLI (glab) is not available. Install it: https://gitlab.com/gitlab-org/cli",
+    );
+  }
+
+  const cloneUrl = `https://${gitlabHost}/${owner}/${repo}.git`;
+  logger.info(`Cloning from ${cloneUrl}...`);
+  try {
+    await exec("git", ["clone", cloneUrl, workspace]);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("Permission denied") || msg.includes("publickey")) {
+      throw new WorkspaceError(
+        `Failed to clone ${owner}/${repo}: SSH authentication failed. ` +
+        `Ensure your SSH key is available (ssh-add) or configure a GITLAB_TOKEN ` +
+        `and use HTTPS: git config --global url."https://oauth2:$GITLAB_TOKEN@${gitlabHost}/".insteadOf "git@${gitlabHost}:"`,
+      );
+    }
+    throw new WorkspaceError(`Failed to clone ${owner}/${repo}: ${msg}`);
+  }
+
+  const { sourceBranch, targetBranch } = await getGitlabMrBranches(owner, repo, prNumber, host);
+  logger.info(`Source branch: ${sourceBranch}, Target branch: ${targetBranch}`);
+  await checkoutGitlabBranch(workspace, sourceBranch);
+
+  return targetBranch;
+}
+
+// ---------------------------------------------------------------------------
+// Main entry point
+// ---------------------------------------------------------------------------
 
 export async function setupWorkspace(opts: {
   platform: Platform;
@@ -85,7 +278,7 @@ export async function setupWorkspace(opts: {
   const { platform, owner, repo, prNumber, host, workingDir, reuse = true } = opts;
 
   try {
-    const ci = detectCiWorkspace(owner, repo, prNumber);
+    const ci = detectCiWorkspace(owner, repo);
     let detectedTargetBranch = ci.targetBranch;
     const detectedDiffBaseSha = ci.diffBaseSha;
 
@@ -103,16 +296,29 @@ export async function setupWorkspace(opts: {
 
       if (reuse && (await isSameRepo(workspace, owner, repo))) {
         logger.info(`Reusing existing workspace: ${workspace}`);
-        await exec("git", ["fetch", "origin"], { cwd: workspace });
+        // Repo already cloned — just fetch and checkout the PR/MR branch
+        if (platform === "github") {
+          const tb = await fetchAndCheckoutGithubPr(workspace, prNumber);
+          if (!detectedTargetBranch) detectedTargetBranch = tb;
+        } else if (platform === "gitlab") {
+          const tb = await fetchAndCheckoutGitlabMr(workspace, owner, repo, prNumber, host);
+          if (!detectedTargetBranch) detectedTargetBranch = tb;
+        }
+        const finalTargetBranch = detectedTargetBranch ?? "main";
+        logger.info(
+          `Workspace ready at: ${workspace} (target: ${finalTargetBranch}, ` +
+          `diff_base_sha: ${detectedDiffBaseSha?.slice(0, 8) ?? "N/A"})`,
+        );
+        return { workspace, targetBranch: finalTargetBranch, diffBaseSha: detectedDiffBaseSha };
       }
     }
 
     if (!ci.path) {
       if (platform === "github") {
-        const tb = await setupGithubWorkspace(workspace, owner, repo, prNumber);
+        const tb = await cloneAndCheckoutGithubPr(workspace, owner, repo, prNumber);
         if (!detectedTargetBranch) detectedTargetBranch = tb;
       } else if (platform === "gitlab") {
-        const tb = await setupGitlabWorkspace(workspace, owner, repo, prNumber, host);
+        const tb = await cloneAndCheckoutGitlabMr(workspace, owner, repo, prNumber, host);
         if (!detectedTargetBranch) detectedTargetBranch = tb;
       } else {
         throw new WorkspaceError(`Unsupported platform: ${platform}`);
@@ -130,128 +336,6 @@ export async function setupWorkspace(opts: {
     const msg = err instanceof Error ? err.message : String(err);
     throw new WorkspaceError(`Failed to setup workspace: ${msg}`);
   }
-}
-
-async function setupGithubWorkspace(
-  workspace: string,
-  owner: string,
-  repo: string,
-  prNumber: string,
-): Promise<string> {
-  logger.info(`Setting up GitHub workspace for ${owner}/${repo}/pull/${prNumber}`);
-
-  // Verify gh CLI
-  try {
-    await exec("gh", ["version"]);
-  } catch {
-    throw new WorkspaceError("GitHub CLI (gh) is not available. Install it: https://cli.github.com");
-  }
-
-  // Clone
-  logger.info(`Cloning repository ${owner}/${repo}...`);
-  try {
-    await exec("gh", ["repo", "clone", `${owner}/${repo}`, workspace]);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new WorkspaceError(`Failed to clone repository ${owner}/${repo}: ${msg}`);
-  }
-
-  // Checkout PR
-  logger.info(`Checking out PR #${prNumber}...`);
-  try {
-    await exec("gh", ["pr", "checkout", prNumber], { cwd: workspace });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new WorkspaceError(`Failed to checkout PR #${prNumber}: ${msg}`);
-  }
-
-  // Get base branch
-  let baseBranch = "main";
-  try {
-    const prInfo = await execJson<Record<string, string>>(
-      "gh",
-      ["pr", "view", prNumber, "--json", "headRefName,baseRefName"],
-      { cwd: workspace },
-    );
-    baseBranch = prInfo.baseRefName ?? "main";
-    logger.info(`Base branch: ${baseBranch}`);
-  } catch {
-    logger.warn("Could not fetch PR metadata for base branch detection");
-  }
-
-  return baseBranch;
-}
-
-async function setupGitlabWorkspace(
-  workspace: string,
-  owner: string,
-  repo: string,
-  prNumber: string,
-  host?: string,
-): Promise<string> {
-  const gitlabHost = host || process.env.GITLAB_HOST || "gitlab.com";
-  logger.info(`Setting up GitLab workspace for ${owner}/${repo}/merge_requests/${prNumber}`);
-
-  // Verify glab CLI
-  try {
-    await exec("glab", ["version"]);
-  } catch {
-    throw new WorkspaceError(
-      "GitLab CLI (glab) is not available. Install it: https://gitlab.com/gitlab-org/cli",
-    );
-  }
-
-  // Clone
-  const cloneUrl = `https://${gitlabHost}/${owner}/${repo}.git`;
-  logger.info(`Cloning from ${cloneUrl}...`);
-  try {
-    await exec("git", ["clone", cloneUrl, workspace]);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    // Detect SSH auth failures (git insteadOf rewrites HTTPS → SSH)
-    if (msg.includes("Permission denied") || msg.includes("publickey")) {
-      throw new WorkspaceError(
-        `Failed to clone ${owner}/${repo}: SSH authentication failed. ` +
-        `Ensure your SSH key is available (ssh-add) or configure a GITLAB_TOKEN ` +
-        `and use HTTPS: git config --global url."https://oauth2:$GITLAB_TOKEN@${gitlabHost}/".insteadOf "git@${gitlabHost}:"`,
-      );
-    }
-    throw new WorkspaceError(`Failed to clone ${owner}/${repo}: ${msg}`);
-  }
-
-  // Fetch MR info for source/target branch
-  let mrInfo: MrMetadata;
-  try {
-    mrInfo = await fetchGitlabMrInfo(owner, repo, Number(prNumber), gitlabHost);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new WorkspaceError(`Failed to fetch MR info for !${prNumber}: ${msg}`);
-  }
-
-  const sourceBranch = mrInfo.source_branch;
-  const targetBranch = mrInfo.target_branch ?? "main";
-
-  if (!sourceBranch) {
-    throw new WorkspaceError(`Could not determine source branch for MR !${prNumber}`);
-  }
-
-  logger.info(`Source branch: ${sourceBranch}, Target branch: ${targetBranch}`);
-
-  // Checkout source branch
-  try {
-    await exec("git", ["checkout", "-b", sourceBranch, `origin/${sourceBranch}`], {
-      cwd: workspace,
-    });
-  } catch {
-    try {
-      await exec("git", ["checkout", sourceBranch], { cwd: workspace });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new WorkspaceError(`Failed to checkout MR branch '${sourceBranch}': ${msg}`);
-    }
-  }
-
-  return targetBranch;
 }
 
 export async function cleanupWorkspace(workspace: string): Promise<void> {
