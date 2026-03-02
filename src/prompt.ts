@@ -53,12 +53,13 @@ export function buildPrReviewPrompt(opts: {
     throw new Error(`Failed to load prompt template from ${templateFile}: ${err}`);
   }
 
-  // Validate ref inputs to prevent shell injection via branch/SHA names
-  const safeRef = /^[a-zA-Z0-9_.\/\-]+$/;
-  if (!safeRef.test(targetBranch)) {
+  // Validate ref inputs to prevent shell injection via branch/SHA names.
+  // Block shell metacharacters while allowing valid git ref chars (@, +, ~, ^, etc.)
+  const dangerousChars = /[;\|`$&<>(){}\n\r\0\\!]/;
+  if (dangerousChars.test(targetBranch)) {
     throw new Error(`Invalid target branch name: ${targetBranch}`);
   }
-  if (diffBaseSha && !safeRef.test(diffBaseSha)) {
+  if (diffBaseSha && dangerousChars.test(diffBaseSha)) {
     throw new Error(`Invalid diff base SHA: ${diffBaseSha}`);
   }
 

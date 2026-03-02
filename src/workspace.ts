@@ -86,7 +86,7 @@ async function isSameRepo(
     if (!match) return false;
     const remotePath = match[1];
     const expectedPath = `${owner}/${repo}`;
-    return remotePath === expectedPath || remotePath.endsWith(`/${expectedPath}`);
+    return remotePath === expectedPath;
   } catch {
     return false;
   }
