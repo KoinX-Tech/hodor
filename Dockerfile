@@ -63,11 +63,10 @@ COPY --from=builder /build/package.json ./
 ENV COLUMNS=200
 ENV LINES=50
 
-# Create non-root user
-RUN useradd -m -u 1000 hodor && \
-    chown -R hodor:hodor /app && \
+# Use the existing 'node' user (UID 1000) from node:22-slim
+RUN chown -R node:node /app && \
     mkdir -p /workspace /tmp/hodor && \
-    chown -R hodor:hodor /workspace /tmp/hodor
+    chown -R node:node /workspace /tmp/hodor
 
 LABEL org.opencontainers.image.title="Hodor" \
       org.opencontainers.image.description="AI-powered code review agent for GitHub and GitLab" \
@@ -76,7 +75,7 @@ LABEL org.opencontainers.image.title="Hodor" \
       org.opencontainers.image.vendor="Karan Sharma" \
       org.opencontainers.image.licenses="MIT"
 
-USER hodor
+USER node
 
 ENV HODOR_WORKSPACE=/workspace
 
