@@ -240,19 +240,10 @@ export async function reviewPr(opts: {
   // Resolve API key (throws if missing for non-bedrock providers)
   const apiKey = getApiKey(model);
 
-  // For bedrock, verify AWS credentials are present
-  if (parsed.provider === "amazon-bedrock") {
-    const hasAwsCreds =
-      process.env.AWS_ACCESS_KEY_ID ||
-      process.env.AWS_PROFILE ||
-      process.env.AWS_WEB_IDENTITY_TOKEN_FILE; // EKS/IRSA
-    if (!hasAwsCreds) {
-      throw new Error(
-        "Bedrock model requires AWS credentials. Set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY, " +
-        "AWS_PROFILE, or run from an environment with an IAM role.",
-      );
-    }
-  }
+  // Note: For bedrock, we don't preflight-check AWS credentials because the
+  // SDK resolves them from many sources (env vars, IMDS, ECS task role, IRSA,
+  // ~/.aws/credentials, etc.) and we can't reliably detect all of them.
+  // If credentials are missing, the SDK will fail with a clear error.
 
   // Snapshot env vars we may mutate, restore in finally block
   const envSnapshot: Record<string, string | undefined> = {
