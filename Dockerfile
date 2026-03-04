@@ -1,26 +1,29 @@
-FROM node:22-slim AS builder
-
+FROM oven/bun:1 AS base
 WORKDIR /build
 
-# Copy package files for dependency installation
-COPY package.json package-lock.json* ./
+# Install dependencies into temp dirs for caching
+FROM base AS install
 
-# Install all dependencies (including dev for build)
-RUN npm ci
+# Dev dependencies (for build)
+RUN mkdir -p /temp/dev
+COPY package.json bun.lock* package-lock.json* /temp/dev/
+RUN cd /temp/dev && bun install --frozen-lockfile 2>/dev/null || cd /temp/dev && bun install
 
-# Copy source code and config
-COPY tsconfig.json tsup.config.ts ./
+# Production dependencies only
+RUN mkdir -p /temp/prod
+COPY package.json bun.lock* package-lock.json* /temp/prod/
+RUN cd /temp/prod && (bun install --frozen-lockfile --production 2>/dev/null || bun install --production)
+
+# Build stage
+FROM base AS build
+COPY --from=install /temp/dev/node_modules node_modules
+COPY tsconfig.json tsup.config.ts package.json ./
 COPY src ./src
 COPY templates ./templates
-
-# Build the project
-RUN npm run build
-
-# Prune dev dependencies
-RUN npm prune --production
+RUN bun run build
 
 # Final stage
-FROM node:22-slim
+FROM oven/bun:1-slim
 
 # Install system dependencies for PR reviews
 RUN apt-get update && \
@@ -54,19 +57,18 @@ RUN curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/v1.77.0/downloads/g
 WORKDIR /app
 
 # Copy built application and production deps
-COPY --from=builder /build/dist ./dist
-COPY --from=builder /build/templates ./templates
-COPY --from=builder /build/node_modules ./node_modules
-COPY --from=builder /build/package.json ./
+COPY --from=install /temp/prod/node_modules node_modules
+COPY --from=build /build/dist ./dist
+COPY --from=build /build/templates ./templates
+COPY --from=build /build/package.json ./
 
 # Set wider terminal dimensions
 ENV COLUMNS=200
 ENV LINES=50
 
-# Use the existing 'node' user (UID 1000) from node:22-slim
-RUN chown -R node:node /app && \
-    mkdir -p /workspace /tmp/hodor && \
-    chown -R node:node /workspace /tmp/hodor
+# Workspace for cloned repos
+RUN mkdir -p /workspace /tmp/hodor && \
+    chown -R bun:bun /app /workspace /tmp/hodor
 
 LABEL org.opencontainers.image.title="Hodor" \
       org.opencontainers.image.description="AI-powered code review agent for GitHub and GitLab" \
@@ -75,9 +77,9 @@ LABEL org.opencontainers.image.title="Hodor" \
       org.opencontainers.image.vendor="Karan Sharma" \
       org.opencontainers.image.licenses="MIT"
 
-USER node
+USER bun
 
 ENV HODOR_WORKSPACE=/workspace
 
-ENTRYPOINT ["node", "dist/cli.js"]
+ENTRYPOINT ["bun", "run", "dist/cli.js"]
 CMD ["--help"]
