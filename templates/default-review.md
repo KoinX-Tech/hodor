@@ -123,6 +123,8 @@ Output all findings that the original author would fix if they knew about it. If
 
 ## Output Format
 
+**IMPORTANT: Your final message must contain ONLY the structured review below. Do not include any analysis, reasoning, preamble, or explanatory text. All your analysis should happen via tool calls (reading files, running diffs, grep). Your final response must start directly with `### Issues Found`.**
+
 ```markdown
 ### Issues Found
 

@@ -65,7 +65,11 @@ program
     const workspace = cmdOpts.workspace as string | undefined;
     const ultrathink = cmdOpts.ultrathink as boolean;
 
+    // Auto-detect CI environment
+    const isCI = !!(process.env.CI || process.env.GITLAB_CI || process.env.GITHUB_ACTIONS);
+
     if (verbose) setLogLevel("debug");
+    else if (isCI) setLogLevel("info");
 
     // Handle ultrathink
     if (ultrathink) {
@@ -74,8 +78,9 @@ program
 
     // Use stderr for all non-review output so --json stdout stays machine-readable
     const log = outputJson ? console.error : console.log;
+    const logStream = outputJson ? process.stderr : process.stdout;
 
-    const spinner = ora({ stream: outputJson ? process.stderr : process.stdout });
+    const spinner = isCI ? null : ora({ stream: logStream });
     const toolIcons: Record<string, string> = {
       bash: "terminal",
       read: "file",
@@ -84,36 +89,73 @@ program
       ls: "ls",
     };
 
+    /** Write a plain log line to the output stream (used in CI instead of spinner) */
+    function ciLog(msg: string): void {
+      logStream.write(`${msg}\n`);
+    }
+
     function handleEvent(event: AgentProgressEvent): void {
+      if (isCI) {
+        // Plain sequential log lines for CI — no ANSI cursor tricks
+        switch (event.type) {
+          case "agent_start":
+            ciLog("▶ Agent started, analyzing PR...");
+            break;
+          case "turn_start":
+            ciLog(`── Turn ${event.turnIndex ?? "?"} ──`);
+            break;
+          case "tool_start": {
+            const icon = toolIcons[event.toolName ?? ""] ?? event.toolName;
+            const preview = event.toolArgs
+              ? ` ${event.toolArgs.slice(0, 120)}${event.toolArgs.length > 120 ? "…" : ""}`
+              : "";
+            ciLog(`  ▸ [${icon}]${preview}`);
+            break;
+          }
+          case "tool_end": {
+            const icon = toolIcons[event.toolName ?? ""] ?? event.toolName;
+            const status = event.isError ? "✗" : "✓";
+            ciLog(`  ${status} [${icon}]`);
+            break;
+          }
+          case "agent_end":
+            ciLog("▶ Extracting review...");
+            break;
+          // thinking, turn_end: skip in CI to reduce noise
+        }
+        return;
+      }
+
+      // Interactive terminal — use spinner
       switch (event.type) {
         case "agent_start":
-          spinner.text = "Agent started, analyzing PR...";
+          spinner!.text = "Agent started, analyzing PR...";
           break;
         case "turn_start":
-          spinner.text = `Turn ${event.turnIndex ?? "?"} — thinking...`;
+          spinner!.text = `Turn ${event.turnIndex ?? "?"} — thinking...`;
           break;
         case "thinking":
-          spinner.text = `Turn ${event.turnIndex ?? "?"} — reasoning...`;
+          spinner!.text = `Turn ${event.turnIndex ?? "?"} — reasoning...`;
           break;
         case "tool_start": {
           const icon = toolIcons[event.toolName ?? ""] ?? event.toolName;
           const preview = event.toolArgs
             ? `: ${event.toolArgs.slice(0, 80)}${event.toolArgs.length > 80 ? "…" : ""}`
             : "";
-          spinner.text = `[${icon}]${preview}`;
+          spinner!.text = `[${icon}]${preview}`;
           break;
         }
         case "tool_end": {
           const status = event.isError ? chalk.red("✗") : chalk.green("✓");
           const icon = toolIcons[event.toolName ?? ""] ?? event.toolName;
-          spinner.text = `[${icon}] ${status}`;
+          spinner!.text = `[${icon}] ${status}`;
           break;
         }
         case "turn_end":
-          spinner.text = `Turn ${event.turnIndex ?? "?"} complete`;
+          spinner!.text = `Turn ${event.turnIndex ?? "?"} complete`;
           break;
         case "agent_end":
-          spinner.text = "Extracting review...";
+          spinner!.text = "Extracting review...";
           break;
       }
     }
@@ -160,7 +202,8 @@ program
       }
       log();
 
-      spinner.start("Setting up workspace...");
+      if (spinner) spinner.start("Setting up workspace...");
+      else ciLog("▶ Setting up workspace...");
       const { reviewText, metricsFooter } = await reviewPr({
         prUrl,
         model,
@@ -174,7 +217,8 @@ program
         onEvent: handleEvent,
       });
 
-      spinner.succeed("Review complete!");
+      if (spinner) spinner.succeed("Review complete!");
+      else ciLog("✔ Review complete!");
 
       if (post) {
         log(chalk.cyan("\nPosting review to PR/MR..."));
@@ -211,7 +255,8 @@ program
         }
       }
     } catch (err) {
-      spinner.fail("Review failed");
+      if (spinner) spinner.fail("Review failed");
+      else ciLog("✗ Review failed");
       console.error(
         chalk.bold.red(`\nError: ${err instanceof Error ? err.message : err}`),
       );

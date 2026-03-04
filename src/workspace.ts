@@ -17,6 +17,7 @@ export interface WorkspaceResult {
   workspace: string;
   targetBranch: string;
   diffBaseSha: string | null;
+  isTemporary: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -283,11 +284,13 @@ export async function setupWorkspace(opts: {
     const detectedDiffBaseSha = ci.diffBaseSha;
 
     let workspace: string;
+    let isTemporary = false;
 
     if (ci.path) {
       workspace = ci.path;
     } else if (!workingDir) {
       workspace = await mkdtemp(join(tmpdir(), "hodor-review-"));
+      isTemporary = true;
       logger.info(`Created temporary workspace: ${workspace}`);
     } else {
       workspace = workingDir;
@@ -309,7 +312,7 @@ export async function setupWorkspace(opts: {
           `Workspace ready at: ${workspace} (target: ${finalTargetBranch}, ` +
           `diff_base_sha: ${detectedDiffBaseSha?.slice(0, 8) ?? "N/A"})`,
         );
-        return { workspace, targetBranch: finalTargetBranch, diffBaseSha: detectedDiffBaseSha };
+        return { workspace, targetBranch: finalTargetBranch, diffBaseSha: detectedDiffBaseSha, isTemporary: false };
       }
     }
 
@@ -330,7 +333,7 @@ export async function setupWorkspace(opts: {
       `Workspace ready at: ${workspace} (target: ${finalTargetBranch}, ` +
       `diff_base_sha: ${detectedDiffBaseSha?.slice(0, 8) ?? "N/A"})`,
     );
-    return { workspace, targetBranch: finalTargetBranch, diffBaseSha: detectedDiffBaseSha };
+    return { workspace, targetBranch: finalTargetBranch, diffBaseSha: detectedDiffBaseSha, isTemporary };
   } catch (err) {
     if (err instanceof WorkspaceError) throw err;
     const msg = err instanceof Error ? err.message : String(err);

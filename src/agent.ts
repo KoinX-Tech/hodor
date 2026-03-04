@@ -313,7 +313,7 @@ export async function reviewPr(opts: {
   // --- End preflight ---
 
   // Setup workspace
-  const { workspace, targetBranch, diffBaseSha } = await setupWorkspace({
+  const { workspace, targetBranch, diffBaseSha, isTemporary } = await setupWorkspace({
     platform,
     owner,
     repo,
@@ -458,7 +458,23 @@ export async function reviewPr(opts: {
     }
 
     // Extract review text from last assistant message
-    const reviewText = session.getLastAssistantText() ?? "";
+    const rawText = session.getLastAssistantText() ?? "";
+
+    // Strip reasoning preamble — only keep the structured review section
+    let reviewText = rawText;
+    const structuredStart = rawText.indexOf("### Issues Found");
+    if (structuredStart > 0) {
+      logger.info("Stripping reasoning preamble from review output");
+      logger.info(`--- Agent reasoning ---\n${rawText.slice(0, structuredStart).trimEnd()}\n--- End reasoning ---`);
+      reviewText = rawText.slice(structuredStart);
+    } else {
+      const altStart = rawText.indexOf("### Summary");
+      if (altStart > 0) {
+        logger.info("Stripping reasoning preamble from review output");
+        logger.info(`--- Agent reasoning ---\n${rawText.slice(0, altStart).trimEnd()}\n--- End reasoning ---`);
+        reviewText = rawText.slice(altStart);
+      }
+    }
 
     if (!reviewText) {
       const messages = (session as unknown as { state: { messages: unknown[] } }).state?.messages;
@@ -535,7 +551,7 @@ export async function reviewPr(opts: {
       }
     }
 
-    if (cleanup && !workspaceDir) {
+    if (cleanup && isTemporary) {
       logger.info("Cleaning up workspace...");
       await cleanupWorkspace(workspacePath);
     }
