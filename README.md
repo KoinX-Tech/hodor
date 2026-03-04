@@ -95,7 +95,7 @@ docker run --rm \
 
 ## Skills: Repository-Specific Context
 
-Hodor supports skills for applying custom review guidelines. Skills inject repository-specific context into the agent's system prompt, such as:
+Hodor uses the upstream pi-coding-agent skills format (`agentskills.io`). Skills are discovered from `.pi/skills` or `.hodor/skills` and loaded on demand, such as:
 - Coding conventions (naming, patterns, anti-patterns)
 - Security requirements (auth checks, input validation)
 - Performance expectations (latency budgets, memory limits)
@@ -103,14 +103,17 @@ Hodor supports skills for applying custom review guidelines. Skills inject repos
 
 ### How to Use Skills
 
-**1. Create a skills directory:**
+**1. Create a skill directory:**
 ```bash
-mkdir -p .hodor/skills
+mkdir -p .pi/skills/review-guidelines
 ```
 
-**2. Add a skill file (`.hodor/skills/conventions.md`):**
+**2. Add a skill file (`.pi/skills/review-guidelines/SKILL.md`):**
 ```markdown
-# Code Review Guidelines for MyProject
+---
+name: review-guidelines
+description: Project-specific review checklist for security, performance, and tests.
+---
 
 ## Security
 - All API endpoints must have authentication checks.
@@ -124,11 +127,11 @@ mkdir -p .hodor/skills
 ```
 
 **3. Run review with skills:**
-The agent will automatically discover and load skills from the `.hodor/skills/` directory within the workspace.
+The agent will automatically discover skills from `.pi/skills/` or `.hodor/skills/` in the reviewed repository and read matching skills on demand.
 ```bash
 bun run dist/cli.js <PR_URL> --workspace . --verbose
 ```
-Use `--verbose` to see which skills were loaded.
+Use `--verbose` to see discovered skills and diagnostics.
 
 See [SKILLS.md](./docs/SKILLS.md) for detailed examples and patterns.
 

@@ -41,9 +41,9 @@ Use the **skills system** to encode your team's standards:
 
 ```bash
 # In your repository root
-.cursorrules                    # Simple, single-file project guidelines
-agents.md                       # Alternative single-file location
-.hodor/skills/*.md              # Modular skills organized by topic
+.pi/skills/<name>/SKILL.md      # Upstream skills format (recommended)
+.pi/skills/*.md                 # Flat markdown skills (supported)
+.hodor/skills/...               # Also supported (same layout)
 ```
 
 See [SKILLS.md](./SKILLS.md) for detailed documentation.
@@ -210,7 +210,7 @@ rules:
 
 **Solution**: Try:
 1. Use `--verbose` to see what agent is checking
-2. Add repo-specific guidelines in `.hodor/skills/`
+2. Add repo-specific guidelines in `.pi/skills/` or `.hodor/skills/`
 3. Increase `--reasoning-effort high`
 4. Use `--ultrathink` for maximum depth
 
@@ -227,7 +227,7 @@ hodor-review:
 
 ### DO:
 - Run automated reviews on all non-trivial PRs
-- Use `.hodor/skills/` for project-specific guidelines
+- Use `.pi/skills/` or `.hodor/skills/` for project-specific guidelines
 - Post reviews automatically (use `--post` flag)
 - Enable verbose logging initially (debug issues)
 - Treat reviews as suggestions (not blockers)

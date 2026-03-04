@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { logger } from "./utils/logger.js";
 import { exec } from "./utils/exec.js";
@@ -157,50 +157,6 @@ export async function postReviewComment(opts: {
   }
 }
 
-/**
- * Discover skills from workspace (.hodor/skills/*.md and .cursorrules).
- */
-function tryLoadSkill(filePath: string, label: string): string | null {
-  try {
-    const content = readFileSync(filePath, "utf-8");
-    if (content.trim()) {
-      logger.info(`Found skill: ${label}`);
-      return content;
-    }
-  } catch (err: unknown) {
-    // ENOENT (file not found) is expected — skip silently
-    // Other errors (permission denied, encoding issues) should be logged
-    if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code !== "ENOENT") {
-      logger.warn(`Failed to read skill ${label}: ${err.message}`);
-    }
-  }
-  return null;
-}
-
-function discoverSkills(workspace: string): string[] {
-  const skills: string[] = [];
-
-  // Check .cursorrules + common skill files
-  for (const name of [".cursorrules", "AGENTS.md", "agents.md", "claude.md", "gemini.md"]) {
-    const content = tryLoadSkill(join(workspace, name), name);
-    if (content) skills.push(content);
-  }
-
-  // Check .hodor/skills/*.md
-  try {
-    const skillsDir = join(workspace, ".hodor", "skills");
-    const files = readdirSync(skillsDir).filter((f) => f.endsWith(".md")).sort();
-    for (const file of files) {
-      const content = tryLoadSkill(join(skillsDir, file), `.hodor/skills/${file}`);
-      if (content) skills.push(content);
-    }
-  } catch {
-    // .hodor/skills/ doesn't exist — skip
-  }
-
-  return skills;
-}
-
 export async function reviewPr(opts: {
   prUrl: string;
   model?: string;
@@ -264,6 +220,7 @@ export async function reviewPr(opts: {
   // Import pi SDK
   const {
     createAgentSession,
+    DefaultResourceLoader,
     SessionManager,
     SettingsManager,
     createReadTool,
@@ -271,7 +228,6 @@ export async function reviewPr(opts: {
     createGrepTool,
     createFindTool,
     createLsTool,
-    createExtensionRuntime,
   } = await import("@mariozechner/pi-coding-agent");
   const { getModel } = await import("@mariozechner/pi-ai");
 
@@ -326,12 +282,6 @@ export async function reviewPr(opts: {
   const workspacePath = workspace;
 
   try {
-    // Discover skills
-    const skills = discoverSkills(workspacePath);
-    if (skills.length > 0) {
-      logger.info(`Discovered ${skills.length} repository skill(s)`);
-    }
-
     // Fetch PR metadata
     let mrMetadata: MrMetadata | null = null;
     if (platform === "gitlab") {
@@ -364,14 +314,36 @@ export async function reviewPr(opts: {
     });
 
     const startTime = Date.now();
-
-    // Build system prompt with skills injected
-    let systemPrompt = REVIEW_SYSTEM_PROMPT;
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false },
+    });
+    const skillPaths = [
+      join(workspacePath, ".pi", "skills"),
+      join(workspacePath, ".hodor", "skills"),
+    ].filter((p) => existsSync(p));
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: workspacePath,
+      settingsManager,
+      systemPrompt: REVIEW_SYSTEM_PROMPT,
+      appendSystemPrompt: "",
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      additionalSkillPaths: skillPaths,
+      agentsFilesOverride: () => ({ agentsFiles: [] }),
+    });
+    await resourceLoader.reload();
+    const { skills, diagnostics: skillDiagnostics } = resourceLoader.getSkills();
     if (skills.length > 0) {
-      systemPrompt +=
-        "\n\n<REPOSITORY_SKILLS>\n" +
-        skills.join("\n\n---\n\n") +
-        "\n</REPOSITORY_SKILLS>";
+      logger.info(`Discovered ${skills.length} repository skill(s)`);
+      for (const skill of skills) {
+        logger.info(`Found skill: ${skill.name} (${skill.filePath})`);
+      }
+    }
+    for (const diagnostic of skillDiagnostics) {
+      const path = diagnostic.path ? ` (${diagnostic.path})` : "";
+      logger.warn(`Skill diagnostic: ${diagnostic.message}${path}`);
     }
 
     const { session } = await createAgentSession({
@@ -386,25 +358,8 @@ export async function reviewPr(opts: {
         createLsTool(workspacePath),
       ],
       sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory({
-        compaction: { enabled: false },
-      }),
-      resourceLoader: {
-        getSystemPrompt: () => systemPrompt,
-        getExtensions: () => ({
-          extensions: [],
-          errors: [],
-          runtime: createExtensionRuntime(),
-        }),
-        getSkills: () => ({ skills: [], diagnostics: [] }),
-        getPrompts: () => ({ prompts: [], diagnostics: [] }),
-        getThemes: () => ({ themes: [], diagnostics: [] }),
-        getAgentsFiles: () => ({ agentsFiles: [] }),
-        getAppendSystemPrompt: () => [],
-        getPathMetadata: () => new Map(),
-        extendResources: () => {},
-        reload: async () => {},
-      },
+      settingsManager,
+      resourceLoader,
     });
 
     // Subscribe to agent events for progress + metrics tracking
