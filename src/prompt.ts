@@ -19,7 +19,6 @@ export function buildPrReviewPrompt(opts: {
   mrMetadata?: MrMetadata | null;
   customInstructions?: string | null;
   customPromptFile?: string | null;
-  outputFormat?: "markdown" | "json";
 }): string {
   const {
     prUrl,
@@ -29,20 +28,16 @@ export function buildPrReviewPrompt(opts: {
     mrMetadata,
     customInstructions,
     customPromptFile,
-    outputFormat = "markdown",
   } = opts;
 
-  // Step 1: Determine template
+  // Step 1: Determine template (always JSON; rendered to markdown post-hoc)
   let templateFile: string;
   if (customPromptFile) {
     templateFile = customPromptFile;
     logger.info(`Using custom prompt file: ${templateFile}`);
-  } else if (outputFormat === "json") {
+  } else {
     templateFile = resolve(getTemplatesDir(), "json-review.md");
     logger.info("Using JSON review template");
-  } else {
-    templateFile = resolve(getTemplatesDir(), "default-review.md");
-    logger.info("Using default markdown template");
   }
 
   // Step 2: Load template

@@ -228,7 +228,7 @@ See [AUTOMATED_REVIEWS.md](./docs/AUTOMATED_REVIEWS.md) for advanced workflows.
 | `--prompt-file` | – | Replace base prompt with a custom markdown file. |
 | `--workspace` | Temp dir | Directory for repo checkout. Re-use for faster multi-PR reviews. |
 | `--post` | Off | Auto-post review comment to GitHub/GitLab. |
-| `--json` | Off | Output structured JSON format instead of markdown. |
+| `--json` | Off | Output raw structured JSON instead of rendered markdown. |
 | `--verbose` | Off | Stream agent events in real-time. |
 
 **Environment Variables**
@@ -237,10 +237,12 @@ See [AUTOMATED_REVIEWS.md](./docs/AUTOMATED_REVIEWS.md) for advanced workflows.
 |----------|---------|----------|
 | `ANTHROPIC_API_KEY` | Claude API key | For Anthropic models |
 | `OPENAI_API_KEY` | OpenAI API key | For OpenAI models |
+| `LLM_API_KEY` | Generic fallback API key (used when provider-specific key is not set) | Optional |
 | `GITHUB_TOKEN` / `GITLAB_TOKEN` | Post comments to PRs/MRs | Only with `--post` |
-| `GITLAB_HOST` | Self-hosted GitLab instance (auto-detected) | Optional |
+| `GITLAB_PRIVATE_TOKEN` | Alternative GitLab token name (checked after `GITLAB_TOKEN`) | Optional |
+| `GITLAB_HOST` | Self-hosted GitLab instance (auto-detected from MR URL) | Optional |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | AWS Bedrock authentication | For `bedrock/` models |
-| `AWS_REGION` | AWS region for Bedrock (e.g., `ap-south-1`) | For `bedrock/` models |
+| `AWS_REGION` / `AWS_DEFAULT_REGION` | AWS region for Bedrock (e.g., `ap-south-1`) | For `bedrock/` models |
 | `AWS_PROFILE` | AWS profile name (alternative to access keys) | For `bedrock/` models |
 
 **Note**: Hodor automatically selects the provider-specific key for the requested model (`ANTHROPIC_API_KEY` for Claude, `OPENAI_API_KEY` for GPT). For `bedrock/` models, no API key is needed — authentication uses AWS credentials (environment variables, profiles, or IAM roles).
@@ -292,8 +294,9 @@ Hodor is written in TypeScript and runs on [Bun](https://bun.sh). Key components
 | `src/model.ts` | Model string parsing, API key resolution |
 | `src/gitlab.ts` | GitLab API via `glab` CLI |
 | `src/github.ts` | GitHub API via `gh` CLI |
+| `src/render.ts` | JSON review output → markdown rendering |
 | `src/metrics.ts` | Token usage and cost formatting |
-| `templates/` | Review prompt templates (markdown and JSON) |
+| `templates/` | Review prompt template (JSON schema) |
 
 The agent runtime is provided by [`@mariozechner/pi-coding-agent`](https://github.com/nickarino/pi-coding-agent) with [`@mariozechner/pi-ai`](https://github.com/nickarino/pi-coding-agent) for LLM access. The agent session gets read-only tools (bash, read, grep, find, ls) and a review prompt, then autonomously analyzes the PR.
 

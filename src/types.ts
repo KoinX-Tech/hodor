@@ -49,6 +49,24 @@ export interface ReviewMetrics {
   durationSeconds: number;
 }
 
+export interface ReviewFinding {
+  title: string;
+  body: string;
+  confidence_score?: number;
+  priority?: number | null;
+  code_location?: {
+    absolute_file_path: string;
+    line_range: { start: number; end: number };
+  };
+}
+
+export interface ReviewOutput {
+  findings: ReviewFinding[];
+  overall_correctness: string;
+  overall_explanation: string;
+  overall_confidence_score?: number;
+}
+
 export interface PostCommentResult {
   success: boolean;
   platform?: Platform;

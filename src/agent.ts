@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { logger } from "./utils/logger.js";
 import { exec } from "./utils/exec.js";
@@ -22,6 +21,7 @@ import type {
   PostCommentResult,
   MrMetadata,
 } from "./types.js";
+import { parseReviewJson, renderMarkdown } from "./render.js";
 
 export interface AgentProgressEvent {
   type: "tool_start" | "tool_end" | "thinking" | "turn_start" | "turn_end" | "agent_start" | "agent_end";
@@ -301,7 +301,7 @@ export async function reviewPr(opts: {
       }
     }
 
-    // Build prompt
+    // Build prompt (always uses JSON template; rendered to markdown post-hoc)
     const prompt = buildPrReviewPrompt({
       prUrl,
       platform,
@@ -310,7 +310,6 @@ export async function reviewPr(opts: {
       mrMetadata,
       customInstructions: customPrompt,
       customPromptFile: promptFile,
-      outputFormat,
     });
 
     const startTime = Date.now();
@@ -320,7 +319,7 @@ export async function reviewPr(opts: {
     const skillPaths = [
       join(workspacePath, ".pi", "skills"),
       join(workspacePath, ".hodor", "skills"),
-    ].filter((p) => existsSync(p));
+    ];
     const resourceLoader = new DefaultResourceLoader({
       cwd: workspacePath,
       settingsManager,
@@ -412,31 +411,24 @@ export async function reviewPr(opts: {
       throw new Error(`LLM request failed: ${agentError}`);
     }
 
-    // Extract review text from last assistant message
+    // Extract review from last assistant message and parse JSON
     const rawText = session.getLastAssistantText() ?? "";
-
-    // Strip reasoning preamble — only keep the structured review section
-    let reviewText = rawText;
-    const structuredStart = rawText.indexOf("### Issues Found");
-    if (structuredStart > 0) {
-      logger.info("Stripping reasoning preamble from review output");
-      logger.info(`--- Agent reasoning ---\n${rawText.slice(0, structuredStart).trimEnd()}\n--- End reasoning ---`);
-      reviewText = rawText.slice(structuredStart);
-    } else {
-      const altStart = rawText.indexOf("### Summary");
-      if (altStart > 0) {
-        logger.info("Stripping reasoning preamble from review output");
-        logger.info(`--- Agent reasoning ---\n${rawText.slice(0, altStart).trimEnd()}\n--- End reasoning ---`);
-        reviewText = rawText.slice(altStart);
-      }
-    }
-
-    if (!reviewText) {
+    if (!rawText) {
       const messages = (session as unknown as { state: { messages: unknown[] } }).state?.messages;
       const lastMsg = messages?.[messages.length - 1];
       logger.debug(`Last message: ${JSON.stringify(lastMsg)?.slice(0, 500)}`);
       throw new Error("Agent did not produce any review content");
     }
+
+    logger.debug(`Raw agent output (first 500 chars): ${rawText.slice(0, 500)}`);
+
+    const reviewJson = parseReviewJson(rawText);
+    logger.info(`Parsed ${reviewJson.findings.length} finding(s), verdict: ${reviewJson.overall_correctness}`);
+
+    // Render to the requested output format
+    const reviewText = outputFormat === "json"
+      ? JSON.stringify(reviewJson, null, 2)
+      : renderMarkdown(reviewJson);
 
     const durationSeconds = (Date.now() - startTime) / 1000;
     logger.info(`Review complete (${reviewText.length} chars)`);
