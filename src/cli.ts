@@ -80,7 +80,9 @@ program
     const log = outputJson ? console.error : console.log;
     const logStream = outputJson ? process.stderr : process.stdout;
 
-    const spinner = isCI ? null : ora({ stream: logStream });
+    // Use plain log lines in CI or verbose mode; spinner only for quiet interactive mode
+    const useSpinner = !isCI && !verbose;
+    const spinner = useSpinner ? ora({ stream: logStream }) : null;
     const toolIcons: Record<string, string> = {
       bash: "terminal",
       read: "file",
@@ -89,44 +91,67 @@ program
       ls: "ls",
     };
 
-    /** Write a plain log line to the output stream (used in CI instead of spinner) */
-    function ciLog(msg: string): void {
+    /** Write a line to the output stream */
+    function streamLog(msg: string): void {
       logStream.write(`${msg}\n`);
     }
 
+    /** Write inline text (no newline) for streaming deltas */
+    function streamWrite(text: string): void {
+      process.stderr.write(text);
+    }
+
     function handleEvent(event: AgentProgressEvent): void {
-      if (isCI) {
-        // Plain sequential log lines for CI — no ANSI cursor tricks
+      // Verbose/CI mode: plain sequential log lines
+      if (!useSpinner) {
         switch (event.type) {
           case "agent_start":
-            ciLog("▶ Agent started, analyzing PR...");
+            streamLog("▶ Agent started, analyzing PR...");
             break;
           case "turn_start":
-            ciLog(`── Turn ${event.turnIndex ?? "?"} ──`);
+            streamLog(`\n── Turn ${event.turnIndex ?? "?"} ──`);
             break;
           case "tool_start": {
             const icon = toolIcons[event.toolName ?? ""] ?? event.toolName;
             const preview = event.toolArgs
               ? ` ${event.toolArgs.slice(0, 120)}${event.toolArgs.length > 120 ? "…" : ""}`
               : "";
-            ciLog(`  ▸ [${icon}]${preview}`);
+            streamLog(`  ▸ [${icon}]${preview}`);
             break;
           }
           case "tool_end": {
             const icon = toolIcons[event.toolName ?? ""] ?? event.toolName;
             const status = event.isError ? "✗" : "✓";
-            ciLog(`  ${status} [${icon}]`);
+            streamLog(`  ${status} [${icon}]`);
+            if (verbose && event.result) {
+              // Show tool output in verbose mode (dimmed, truncated)
+              const preview = event.result.length > 200
+                ? event.result.slice(0, 200) + "…"
+                : event.result;
+              for (const line of preview.split("\n").slice(0, 8)) {
+                streamLog(chalk.dim(`    │ ${line}`));
+              }
+            }
             break;
           }
-          case "agent_end":
-            ciLog("▶ Extracting review...");
+          case "thinking_delta":
+            if (verbose && event.delta) {
+              streamWrite(chalk.dim(event.delta));
+            }
             break;
-          // thinking, turn_end: skip in CI to reduce noise
+          case "text_delta":
+            if (verbose && event.delta) {
+              streamWrite(chalk.cyan(event.delta));
+            }
+            break;
+          case "agent_end":
+            streamLog("\n▶ Extracting review...");
+            break;
         }
         return;
       }
 
-      // Interactive terminal — use spinner
+      // Interactive quiet mode — use spinner
       switch (event.type) {
         case "agent_start":
           spinner!.text = "Agent started, analyzing PR...";
@@ -203,7 +228,7 @@ program
       log();
 
       if (spinner) spinner.start("Setting up workspace...");
-      else ciLog("▶ Setting up workspace...");
+      else streamLog("▶ Setting up workspace...");
       const { reviewText, metricsFooter } = await reviewPr({
         prUrl,
         model,
@@ -218,7 +243,7 @@ program
       });
 
       if (spinner) spinner.succeed("Review complete!");
-      else ciLog("✔ Review complete!");
+      else streamLog("✔ Review complete!");
 
       if (post) {
         log(chalk.cyan("\nPosting review to PR/MR..."));
@@ -256,7 +281,7 @@ program
       }
     } catch (err) {
       if (spinner) spinner.fail("Review failed");
-      else ciLog("✗ Review failed");
+      else streamLog("✗ Review failed");
       console.error(
         chalk.bold.red(`\nError: ${err instanceof Error ? err.message : err}`),
       );

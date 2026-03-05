@@ -25,11 +25,13 @@ import type {
 import { parseReviewJson, renderMarkdown } from "./render.js";
 
 export interface AgentProgressEvent {
-  type: "tool_start" | "tool_end" | "thinking" | "turn_start" | "turn_end" | "agent_start" | "agent_end";
+  type: "tool_start" | "tool_end" | "thinking" | "turn_start" | "turn_end" | "agent_start" | "agent_end" | "text_delta" | "thinking_delta" | "tool_result";
   toolName?: string;
   toolArgs?: string;
   isError?: boolean;
   turnIndex?: number;
+  delta?: string;
+  result?: string;
 }
 
 export function detectPlatform(prUrl: string): Platform {
@@ -395,11 +397,25 @@ export async function reviewPr(opts: {
             type: "tool_end",
             toolName: event.toolName,
             isError: event.isError,
+            result: typeof event.result === "string"
+              ? event.result.slice(0, 300)
+              : JSON.stringify(event.result)?.slice(0, 300),
           });
           break;
         case "message_start":
           onEvent?.({ type: "thinking" });
           break;
+        case "message_update": {
+          const msgEvent = (event as Record<string, unknown>).assistantMessageEvent as
+            { type: string; delta?: string } | undefined;
+          if (!msgEvent?.delta) break;
+          if (msgEvent.type === "text_delta") {
+            onEvent?.({ type: "text_delta", delta: msgEvent.delta });
+          } else if (msgEvent.type === "thinking_delta") {
+            onEvent?.({ type: "thinking_delta", delta: msgEvent.delta });
+          }
+          break;
+        }
       }
     });
 
