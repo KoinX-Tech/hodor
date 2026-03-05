@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { logger } from "./utils/logger.js";
 import { exec } from "./utils/exec.js";
@@ -319,7 +320,7 @@ export async function reviewPr(opts: {
     const skillPaths = [
       join(workspacePath, ".pi", "skills"),
       join(workspacePath, ".hodor", "skills"),
-    ];
+    ].filter((p) => existsSync(p));
     const resourceLoader = new DefaultResourceLoader({
       cwd: workspacePath,
       settingsManager,
