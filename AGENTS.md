@@ -16,7 +16,7 @@
 - Tests live in `tests/` using vitest
 
 ## Pi-Coding-Agent SDK Architecture
-Hodor uses [`@mariozechner/pi-coding-agent`](https://github.com/nickarino/pi-coding-agent) for the agent runtime:
+Hodor uses [`@mariozechner/pi-coding-agent`](https://github.com/badlogic/pi-mono) for the agent runtime:
 - **Session Creation**: `createAgentSession()` configures the model, tools, and settings
 - **Tools**: Read-only tools — `createReadTool`, `createBashTool`, `createGrepTool`, `createFindTool`, `createLsTool`
 - **Model Resolution**: `getModel()` from `@mariozechner/pi-ai` for known providers; custom model objects for Bedrock ARNs

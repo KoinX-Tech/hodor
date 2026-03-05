@@ -2,7 +2,7 @@
 
 # Hodor
 
-> An agentic code reviewer for GitHub and GitLab pull requests, powered by the [pi-coding-agent](https://github.com/nickarino/pi-coding-agent) SDK.
+> An agentic code reviewer for GitHub and GitLab pull requests, powered by the [pi-coding-agent](https://github.com/badlogic/pi-mono) SDK.
 
 Hodor performs automated, in-depth code reviews by running as a stateful agent with a reasoning-action loop. It can analyze code, run commands, and provide context-aware feedback.
 
@@ -298,7 +298,7 @@ Hodor is written in TypeScript and runs on [Bun](https://bun.sh). Key components
 | `src/metrics.ts` | Token usage and cost formatting |
 | `templates/` | Review prompt template (JSON schema) |
 
-The agent runtime is provided by [`@mariozechner/pi-coding-agent`](https://github.com/nickarino/pi-coding-agent) with [`@mariozechner/pi-ai`](https://github.com/nickarino/pi-coding-agent) for LLM access. The agent session gets read-only tools (bash, read, grep, find, ls) and a review prompt, then autonomously analyzes the PR.
+The agent runtime is provided by [`@mariozechner/pi-coding-agent`](https://github.com/badlogic/pi-mono) with [`@mariozechner/pi-ai`](https://github.com/badlogic/pi-mono) for LLM access. The agent session gets read-only tools (bash, read, grep, find, ls) and a review prompt, then autonomously analyzes the PR.
 
 ---
 
