@@ -30,14 +30,14 @@ export function buildPrReviewPrompt(opts: {
     customPromptFile,
   } = opts;
 
-  // Step 1: Determine template (always JSON; rendered to markdown post-hoc)
+  // Step 1: Determine template (always tool submission; rendered to markdown post-hoc)
   let templateFile: string;
   if (customPromptFile) {
     templateFile = customPromptFile;
     logger.info(`Using custom prompt file: ${templateFile}`);
   } else {
-    templateFile = resolve(getTemplatesDir(), "json-review.md");
-    logger.info("Using JSON review template");
+    templateFile = resolve(getTemplatesDir(), "tool-review.md");
+    logger.info("Using tool-based review template");
   }
 
   // Step 2: Load template

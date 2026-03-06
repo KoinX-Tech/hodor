@@ -1,6 +1,6 @@
 {
   "name": "hodor",
-  "version": "0.3.0",
+  "version": "0.3.3",
   "description": "AI-powered code review agent that finds bugs, security issues, and logic errors in pull requests",
   "type": "module",
   "main": "dist/index.js",
@@ -40,6 +40,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@sinclair/typebox": "^0.34.48",
     "@anthropic-ai/sdk": "^0.39.0",
     "@mariozechner/pi-ai": "^0.55.1",
     "@mariozechner/pi-coding-agent": "^0.55.1",

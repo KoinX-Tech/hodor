@@ -228,7 +228,6 @@ See [AUTOMATED_REVIEWS.md](./docs/AUTOMATED_REVIEWS.md) for advanced workflows.
 | `--prompt-file` | – | Replace base prompt with a custom markdown file. |
 | `--workspace` | Temp dir | Directory for repo checkout. Re-use for faster multi-PR reviews. |
 | `--post` | Off | Auto-post review comment to GitHub/GitLab. |
-| `--json` | Off | Output raw structured JSON instead of rendered markdown. |
 | `--verbose` | Off | Stream agent events in real-time. |
 
 **Environment Variables**

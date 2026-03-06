@@ -53,6 +53,7 @@ export GIT_PAGER=cat
 - `{git_diff_cmd} -- path/to/file` - See changes for ONE specific file at a time
 - `read` - Read full file with context (use sparingly, only when needed)
 - `grep` - Search for patterns across multiple files efficiently
+- `submit_review` - Submit the final structured review when analysis is complete
 
 ## Review Guidelines
 
@@ -88,7 +89,7 @@ Tag each finding in the title with a priority level:
 - **[P2] Important**: Normal. To be fixed eventually. Performance or maintainability issues. Examples: N+1 queries, O(n²) algorithms, missing validation, incorrect error handling.
 - **[P3] Low**: Nice to have. Code quality concerns. Examples: Code smells, magic numbers, overly complex logic, missing error messages.
 
-Additionally, include a numeric priority field in the JSON output for each finding: set "priority" to 0 for P0, 1 for P1, 2 for P2, or 3 for P3. If a priority cannot be determined, omit the field or use null.
+Always include the matching numeric priority field in the `submit_review` payload: set `"priority"` to 0 for P0, 1 for P1, 2 for P2, or 3 for P3. The title tag and numeric priority must agree.
 
 ### How Many Findings to Return
 
@@ -118,22 +119,19 @@ Output all findings that the original author would fix if they knew about it. If
 - Think: What user input or race condition breaks this?
 - Focus on the changes (+ and - lines), use full file context sparingly
 
-## Output Format
+## Final Submission
 
-At the end of your findings, output an "overall correctness" verdict of whether or not the patch should be considered "correct".
-Correct implies that existing code and tests will not break, and the patch is free of bugs and other blocking issues.
-Ignore non-blocking issues such as style, formatting, typos, documentation, and other nits.
+When you are done, call `submit_review` exactly once with the final structured review.
 
-### Output schema — MUST MATCH *exactly*
+### submit_review payload
 
 ```json
 {
   "findings": [
     {
       "title": "<≤ 80 chars, imperative, with [P0]/[P1]/[P2]/[P3] prefix>",
-      "body": "<valid Markdown explaining *why* this is a problem; cite files/lines/functions; max 1 paragraph>",
-      "confidence_score": <float 0.0-1.0>,
-      "priority": <int 0-3, optional>,
+      "body": "<valid Markdown explaining why this is a problem; max 1 paragraph>",
+      "priority": 0 | 1 | 2 | 3,
       "code_location": {
         "absolute_file_path": "<absolute file path>",
         "line_range": {"start": <int>, "end": <int>}
@@ -141,22 +139,19 @@ Ignore non-blocking issues such as style, formatting, typos, documentation, and 
     }
   ],
   "overall_correctness": "patch is correct" | "patch is incorrect",
-  "overall_explanation": "<1-3 sentence explanation justifying the overall_correctness verdict>",
-  "overall_confidence_score": <float 0.0-1.0>
+  "overall_explanation": "<1-3 sentence explanation justifying the verdict>"
 }
 ```
 
-### Critical Output Requirements
+### Critical Submission Requirements
 
-* **Do not** wrap the JSON in markdown fences or extra prose.
-* Output ONLY the raw JSON object - no markdown code blocks, no explanatory text before or after.
-* The code_location field is required and must include absolute_file_path and line_range.
-* Line ranges must be as short as possible for interpreting the issue (avoid ranges over 5–10 lines; pick the most suitable subrange).
-* The code_location should overlap with the diff.
-* Use absolute file paths (e.g., `/workspace/path/to/file.py`) not relative paths.
-* The title must start with a priority tag: [P0], [P1], [P2], or [P3].
-* The body must be valid Markdown but should be concise (1 paragraph max).
-* Confidence scores are floats between 0.0 and 1.0 indicating your certainty.
-* overall_correctness must be exactly "patch is correct" or "patch is incorrect" (no other variations).
+* Call `submit_review` exactly once after analysis is complete.
+* Do not print the review as normal assistant text.
+* Do not wrap the payload in markdown fences when calling the tool.
+* If there are no findings, submit `"findings": []`.
+* Every finding must include `title`, `body`, `priority`, and `code_location`.
+* Use absolute file paths (for example, `/workspace/path/to/file.py`) not relative paths.
+* The title must start with a priority tag: `[P0]`, `[P1]`, `[P2]`, or `[P3]`.
+* `overall_correctness` must be exactly `"patch is correct"` or `"patch is incorrect"`.
 
 Start by running `{pr_diff_cmd}` to list the changed files, then analyze each file individually using `{git_diff_cmd} -- path/to/file`.

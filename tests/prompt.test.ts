@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { buildMrSections, normalizeLabelNames } from "../src/prompt.js";
+import {
+  buildMrSections,
+  buildPrReviewPrompt,
+  normalizeLabelNames,
+} from "../src/prompt.js";
 
 describe("buildMrSections", () => {
   it("handles string labels", () => {
@@ -62,5 +66,19 @@ describe("normalizeLabelNames", () => {
   it("returns empty for null/undefined", () => {
     expect(normalizeLabelNames(null)).toEqual([]);
     expect(normalizeLabelNames(undefined)).toEqual([]);
+  });
+});
+
+describe("buildPrReviewPrompt", () => {
+  it("uses the tool submission contract by default", () => {
+    const prompt = buildPrReviewPrompt({
+      prUrl: "https://github.com/acme/hodor/pull/42",
+      platform: "github",
+      targetBranch: "main",
+    });
+
+    expect(prompt).toContain("submit_review");
+    expect(prompt).toContain("Do not print the review as normal assistant text.");
+    expect(prompt).not.toContain("Output ONLY the raw JSON object");
   });
 });

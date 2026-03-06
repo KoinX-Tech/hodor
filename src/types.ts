@@ -49,12 +49,14 @@ export interface ReviewMetrics {
   durationSeconds: number;
 }
 
+export type ReviewPriority = 0 | 1 | 2 | 3;
+export type ReviewCorrectness = "patch is correct" | "patch is incorrect";
+
 export interface ReviewFinding {
   title: string;
   body: string;
-  confidence_score?: number;
-  priority?: number | null;
-  code_location?: {
+  priority: ReviewPriority;
+  code_location: {
     absolute_file_path: string;
     line_range: { start: number; end: number };
   };
@@ -62,9 +64,8 @@ export interface ReviewFinding {
 
 export interface ReviewOutput {
   findings: ReviewFinding[];
-  overall_correctness: string;
+  overall_correctness: ReviewCorrectness;
   overall_explanation: string;
-  overall_confidence_score?: number;
 }
 
 export interface PostCommentResult {
@@ -74,4 +75,3 @@ export interface PostCommentResult {
   mrNumber?: number;
   error?: string;
 }
-

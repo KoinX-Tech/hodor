@@ -6,6 +6,7 @@ import "dotenv/config";
 
 import { detectPlatform, postReviewComment, reviewPr } from "./agent.js";
 import type { AgentProgressEvent } from "./agent.js";
+import { renderMarkdown } from "./render.js";
 import { setLogLevel } from "./utils/logger.js";
 
 const program = new Command();
@@ -17,7 +18,7 @@ program
       "Hodor uses an AI agent that clones the repository, checks out the PR branch,\n" +
       "and analyzes the code using tools (gh, git, glab) for metadata fetching and comment posting.",
   )
-  .version("0.3.2")
+  .version("0.3.3")
   .argument("<pr-url>", "URL of the GitHub PR or GitLab MR to review")
   .option(
     "--model <model>",
@@ -32,11 +33,6 @@ program
   .option(
     "--post",
     "Post the review directly to the PR/MR as a comment",
-    false,
-  )
-  .option(
-    "--json",
-    "Output structured JSON format instead of markdown",
     false,
   )
   .option("--prompt <text>", "Custom inline prompt text")
@@ -56,7 +52,6 @@ program
   .action(async (prUrl: string, cmdOpts: Record<string, unknown>) => {
     const verbose = cmdOpts.verbose as boolean;
     const post = cmdOpts.post as boolean;
-    const outputJson = cmdOpts.json as boolean;
     const model = cmdOpts.model as string;
     let reasoningEffort = cmdOpts.reasoningEffort as string | undefined;
     const prompt = cmdOpts.prompt as string | undefined;
@@ -75,9 +70,8 @@ program
       reasoningEffort = "high";
     }
 
-    // Use stderr for all non-review output so --json stdout stays machine-readable
-    const log = outputJson ? console.error : console.log;
-    const logStream = outputJson ? process.stderr : process.stdout;
+    const log = console.log;
+    const logStream = process.stdout;
 
     const toolIcons: Record<string, string> = {
       bash: "$",
@@ -135,7 +129,7 @@ program
           break;
         }
         case "text_delta":
-          if (event.delta) {
+          if (verbose && event.delta) {
             streamWrite(event.delta);
           }
           break;
@@ -194,7 +188,7 @@ program
       log();
 
       streamLog(chalk.dim("▶ Setting up workspace..."));
-      const { reviewText, metricsFooter } = await reviewPr({
+      const { review, metricsFooter } = await reviewPr({
         prUrl,
         model,
         reasoningEffort,
@@ -202,10 +196,10 @@ program
         promptFile,
         cleanup: !workspace,
         workspaceDir: workspace,
-        outputFormat: outputJson ? "json" : "markdown",
         includeMetricsFooter: post,
         onEvent: handleEvent,
       });
+      const reviewText = renderMarkdown(review);
 
       streamLog(chalk.green("✔ Review complete!"));
 
@@ -230,18 +224,13 @@ program
           console.log(reviewText);
         }
       } else {
-        if (!outputJson) {
-          log(chalk.bold.green("Review Complete\n"));
-        }
-        // Review text always goes to stdout (the only stdout output in --json mode)
+        log(chalk.bold.green("Review Complete\n"));
         console.log(reviewText);
-        if (!outputJson) {
-          log(
-            chalk.dim(
-              "\nTip: Use --post to automatically post this review to the PR/MR",
-            ),
-          );
-        }
+        log(
+          chalk.dim(
+            "\nTip: Use --post to automatically post this review to the PR/MR",
+          ),
+        );
       }
     } catch (err) {
       streamLog(chalk.red("✗ Review failed"));

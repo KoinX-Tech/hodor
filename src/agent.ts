@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { logger } from "./utils/logger.js";
 import { exec } from "./utils/exec.js";
 import {
@@ -14,6 +15,7 @@ import { setupWorkspace, cleanupWorkspace } from "./workspace.js";
 import { buildPrReviewPrompt } from "./prompt.js";
 import { parseModelString, mapReasoningEffort, getApiKey } from "./model.js";
 import { formatMetricsMarkdown, printMetrics } from "./metrics.js";
+import { SUBMIT_REVIEW_SCHEMA, validateReviewOutput } from "./review.js";
 import { REVIEW_SYSTEM_PROMPT } from "./system-prompt.js";
 import type {
   Platform,
@@ -21,8 +23,8 @@ import type {
   ReviewMetrics,
   PostCommentResult,
   MrMetadata,
+  ReviewOutput,
 } from "./types.js";
-import { parseReviewJson, renderMarkdown } from "./render.js";
 
 export interface AgentProgressEvent {
   type: "tool_start" | "tool_end" | "thinking" | "turn_start" | "turn_end" | "agent_start" | "agent_end" | "text_delta" | "thinking_delta" | "tool_result";
@@ -168,10 +170,9 @@ export async function reviewPr(opts: {
   promptFile?: string | null;
   cleanup?: boolean;
   workspaceDir?: string | null;
-  outputFormat?: "markdown" | "json";
   includeMetricsFooter?: boolean;
   onEvent?: (event: AgentProgressEvent) => void;
-}): Promise<{ reviewText: string; metricsFooter: string | null }> {
+}): Promise<{ review: ReviewOutput; metricsFooter: string | null }> {
   const {
     prUrl,
     model = "anthropic/claude-sonnet-4-5-20250929",
@@ -180,7 +181,6 @@ export async function reviewPr(opts: {
     promptFile,
     cleanup = true,
     workspaceDir,
-    outputFormat = "markdown",
     includeMetricsFooter = false,
     onEvent,
   } = opts;
@@ -348,6 +348,40 @@ export async function reviewPr(opts: {
       logger.warn(`Skill diagnostic: ${diagnostic.message}${path}`);
     }
 
+    let submittedReview: ReviewOutput | null = null;
+    let submitReviewCalls = 0;
+    const submitReviewTool: ToolDefinition = {
+      name: "submit_review",
+      label: "Submit Review",
+      description: "Submit the final structured review after the analysis is complete.",
+      parameters: SUBMIT_REVIEW_SCHEMA,
+      execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+        submitReviewCalls++;
+        if (submittedReview) {
+          logger.warn("Agent called submit_review more than once; ignoring duplicate submission");
+          return {
+            content: [{
+              type: "text",
+              text: "Review already submitted. Do not call submit_review again.",
+            }],
+            details: { ignoredDuplicate: true },
+          };
+        }
+
+        submittedReview = validateReviewOutput(params as ReviewOutput);
+        logger.info(
+          `Received structured review via submit_review (${submittedReview.findings.length} finding(s))`,
+        );
+        return {
+          content: [{
+            type: "text",
+            text: "Review received. Do not output the review as normal text.",
+          }],
+          details: {},
+        };
+      },
+    };
+
     const { session } = await createAgentSession({
       cwd: workspacePath,
       model: piModel,
@@ -359,6 +393,7 @@ export async function reviewPr(opts: {
         createFindTool(workspacePath),
         createLsTool(workspacePath),
       ],
+      customTools: [submitReviewTool],
       sessionManager: SessionManager.inMemory(),
       settingsManager,
       resourceLoader,
@@ -462,27 +497,31 @@ export async function reviewPr(opts: {
       throw new Error(`LLM request failed: ${agentError}`);
     }
 
-    // Extract review from last assistant message and parse JSON
-    const rawText = session.getLastAssistantText() ?? "";
-    if (!rawText) {
-      const messages = (session as unknown as { state: { messages: unknown[] } }).state?.messages;
-      const lastMsg = messages?.[messages.length - 1];
-      logger.debug(`Last message: ${JSON.stringify(lastMsg)?.slice(0, 500)}`);
-      throw new Error("Agent did not produce any review content");
+    if (!submittedReview) {
+      const rawText = session.getLastAssistantText() ?? "";
+      if (rawText) {
+        logger.debug(`Last assistant text without submit_review (first 500 chars): ${rawText.slice(0, 500)}`);
+      } else {
+        const messages = (session as unknown as { state: { messages: unknown[] } }).state?.messages;
+        const lastMsg = messages?.[messages.length - 1];
+        logger.debug(`Last message: ${JSON.stringify(lastMsg)?.slice(0, 500)}`);
+      }
+      if (submitReviewCalls > 0) {
+        throw new Error("Agent called submit_review but did not provide a valid review payload");
+      }
+      throw new Error("Agent did not call submit_review");
     }
 
-    logger.debug(`Raw agent output (first 500 chars): ${rawText.slice(0, 500)}`);
-
-    const reviewJson = parseReviewJson(rawText);
-    logger.info(`Parsed ${reviewJson.findings.length} finding(s), verdict: ${reviewJson.overall_correctness}`);
-
-    // Render to the requested output format
-    const reviewText = outputFormat === "json"
-      ? JSON.stringify(reviewJson, null, 2)
-      : renderMarkdown(reviewJson);
+    const review = submittedReview as ReviewOutput;
+    if (submitReviewCalls > 1) {
+      logger.warn(`Agent called submit_review ${submitReviewCalls} times; using the first valid submission`);
+    }
+    logger.info(
+      `Captured ${review.findings.length} finding(s), verdict: ${review.overall_correctness}`,
+    );
 
     const durationSeconds = (Date.now() - startTime) / 1000;
-    logger.info(`Review complete (${reviewText.length} chars)`);
+    logger.info(`Review complete (${review.findings.length} finding(s))`);
 
     // Aggregate usage from all assistant messages
     interface MsgUsage {
@@ -538,7 +577,7 @@ export async function reviewPr(opts: {
       metricsFooter = formatMetricsMarkdown(metrics);
     }
 
-    return { reviewText, metricsFooter };
+    return { review, metricsFooter };
   } finally {
     // Restore mutated env vars
     for (const [key, val] of Object.entries(envSnapshot)) {
