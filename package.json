@@ -1,6 +1,6 @@
 {
   "name": "hodor",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "AI-powered code review agent that finds bugs, security issues, and logic errors in pull requests",
   "type": "module",
   "main": "dist/index.js",
