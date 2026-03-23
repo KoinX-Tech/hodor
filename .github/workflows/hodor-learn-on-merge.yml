@@ -20,6 +20,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
   # Needed because the learn pipeline posts a PR comment with extracted learnings.
   pull-requests: write
   issues: write
