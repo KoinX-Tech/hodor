@@ -35,7 +35,7 @@ RUN apt-get update && \
         libssl-dev && \
     rm -rf /var/lib/apt/lists/*
 
-RUN set -euo pipefail && \
+RUN set -euo && \
     if [ -n "${INSPECT_GIT_REV}" ]; then \
       cargo install \
         --git "${INSPECT_GIT_URL}" \
