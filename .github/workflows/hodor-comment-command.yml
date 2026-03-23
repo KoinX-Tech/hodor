@@ -2,12 +2,13 @@ name: Hodor Comment Command
 
 on:
   issue_comment:
-    types: [created]
+    types: [created, edited]
 
 permissions:
   contents: read
   pull-requests: write
   issues: write
+  checks: write
 
 concurrency:
   group: hodor-comment-${{ github.repository }}-${{ github.event.issue.number }}
@@ -27,6 +28,9 @@ jobs:
         uses: actions/github-script@v7
         env:
           HODOR_ALLOWED_ASSOCIATIONS: ${{ vars.HODOR_ALLOWED_ASSOCIATIONS }}
+          # Comma-separated list of allowed PR base branches (target branches).
+          # Defaults to `development`.
+          HODOR_ALLOWED_BASE_BRANCH: ${{ vars.HODOR_ALLOWED_BASE_BRANCH || 'development' }}
         with:
           script: |
             const body = (context.payload.comment?.body || "").trim();
@@ -44,6 +48,28 @@ jobs:
               return;
             }
 
+            const marker = `<!-- hodor-parse-failure:${context.payload.comment.id} -->`;
+            const createParseFailureComment = async (commentBody) => {
+              try {
+                const existing = await github.rest.issues.listComments({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  per_page: 100,
+                });
+                if ((existing.data || []).some((c) => c?.body?.includes(marker))) return;
+
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `${commentBody}\n\n${marker}`,
+                });
+              } catch (commentErr) {
+                core.warning(`Failed to create parse-failure comment: ${commentErr?.message || commentErr}`);
+              }
+            };
+
             if (!allowed.has(association)) {
               core.setOutput("should_run", "false");
               core.setOutput("prompt", "");
@@ -52,8 +78,44 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body: `@${context.actor} only repository members/collaborators can run Hodor.`
+                body: `@${context.actor} only repository members/collaborators can run Hodor.`,
               });
+              return;
+            }
+
+            // Restrict to particular PR base branches (target branch).
+            // In `issue_comment` events, `context.issue.number` is the PR number.
+            const allowedBase = (process.env.HODOR_ALLOWED_BASE_BRANCH || "development")
+              .split(",")
+              .map((v) => v.trim())
+              .filter(Boolean);
+            try {
+              const pr = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+              });
+              const baseRef = pr.data?.base?.ref;
+              if (!baseRef || !allowedBase.includes(baseRef)) {
+                core.setOutput("should_run", "false");
+                core.setOutput("prompt", "");
+                core.setOutput(
+                  "reason",
+                  `wrong_base_branch:${baseRef ?? "unknown"}`,
+                );
+                await createParseFailureComment(
+                  `Hodor ignored your \`/hodor review <Context>\` request because this PR targets \`${baseRef ?? "unknown"}\`.\n\nAllowed PR base branch(es): \`${allowedBase.join("`, `")}\`.\n\nFix: retest by commenting on a PR targeting an allowed base branch (or update \`HODOR_ALLOWED_BASE_BRANCH\`).`
+                );
+                return;
+              }
+
+            } catch (e) {
+              core.setOutput("should_run", "false");
+              core.setOutput("prompt", "");
+              core.setOutput(
+                "reason",
+                "failed_to_resolve_pr_base_branch",
+              );
               return;
             }
 
@@ -64,7 +126,7 @@ jobs:
             core.setOutput("reason", "accepted");
 
       - name: Acknowledge accepted command
-        if: ${{ steps.parse.outputs.should_run == 'true' }}
+        if: ${{ steps.parse.outputs.should_run == 'true' && github.run_attempt == 1 }}
         uses: actions/github-script@v7
         with:
           script: |
@@ -76,7 +138,7 @@ jobs:
             });
 
   review:
-    if: ${{ needs.parse.outputs.should_run == 'true' }}
+    if: ${{ needs.parse.outputs.should_run == 'true' && github.run_attempt == 1 }}
     needs: [parse]
     uses: ./.github/workflows/hodor-reusable-review.yml
     with:

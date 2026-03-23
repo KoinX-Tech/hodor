@@ -50,8 +50,10 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
-  issues: read
+  # Needed because the learn pipeline posts a PR comment with the extracted learnings
+  # (via `gh pr comment`, which uses the GraphQL `addComment` mutation).
+  pull-requests: write
+  issues: write
   checks: write
 
 jobs:
@@ -119,6 +121,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HODOR_GH_CHECKS: "1"
           HODOR_KB_ENABLED: "true"
           HODOR_QDRANT_URL: ${{ inputs.qdrant_url }}

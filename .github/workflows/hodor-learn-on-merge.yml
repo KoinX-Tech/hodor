@@ -20,8 +20,10 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
-  issues: read
+  # Needed because the learn pipeline posts a PR comment with extracted learnings.
+  pull-requests: write
+  issues: write
+  checks: write
 
 concurrency:
   group: hodor-learn-${{ github.repository }}-${{ github.event.pull_request.number }}
