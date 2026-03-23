@@ -111,5 +111,5 @@ USER bun
 
 ENV HODOR_WORKSPACE=/workspace
 
-ENTRYPOINT ["bun", "run", "dist/cli.js"]
+ENTRYPOINT ["bun", "run", "/app/dist/cli.js"]
 CMD ["--help"]
