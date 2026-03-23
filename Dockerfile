@@ -23,7 +23,7 @@ COPY templates ./templates
 RUN bun run build
 
 # Build inspect CLI (used by the agent runtime)
-FROM rust:1.78-slim AS inspect-build
+FROM rust:1.83-slim AS inspect-build
 ARG INSPECT_GIT_URL="https://github.com/Ataraxy-Labs/inspect"
 ARG INSPECT_GIT_REV=""
 
