@@ -69,7 +69,7 @@ export function formatKnowledgeExtractionMarkdown(
   ];
 
   if (extraction.learnings.length > 0) {
-    lines.push("**Learnings saved:** \n");
+    lines.push("\n\n**Learnings saved:** \n");
     for (const learning of extraction.learnings) {
       lines.push(`- ${learning}`);
     }
