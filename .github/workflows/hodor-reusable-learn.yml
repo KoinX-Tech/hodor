@@ -140,7 +140,7 @@ jobs:
             cmd+=("--dry-run")
           fi
 
-          docker run --rm --user 0:0 \
+          docker run --pull=always --rm --user 0:0 \
             -e GITHUB_ACTIONS="true" \
             -e GITHUB_WORKSPACE="${GITHUB_WORKSPACE}" \
             -e GITHUB_REPOSITORY="${GITHUB_REPOSITORY}" \

@@ -89,6 +89,9 @@ RUN curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/v1.77.0/downloads/g
 
 WORKDIR /app
 
+# Workspace-safe entrypoint
+COPY docker-entrypoint.sh /usr/local/bin/hodor-entrypoint.sh
+
 # Copy inspect binary into the final image
 COPY --from=inspect-build /tmp/inspect-root/bin/inspect /usr/local/bin/inspect
 
@@ -111,5 +114,5 @@ USER bun
 
 ENV HODOR_WORKSPACE=/workspace
 
-ENTRYPOINT ["bun", "run", "/app/dist/cli.js"]
+ENTRYPOINT ["sh", "/usr/local/bin/hodor-entrypoint.sh"]
 CMD ["--help"]
