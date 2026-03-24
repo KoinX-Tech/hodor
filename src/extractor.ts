@@ -180,6 +180,14 @@ function parseExtractionResponse(raw: string): SaveKnowledgeInput[] {
     paths: Array.isArray(item.paths) ? item.paths.map(String) : undefined,
     symbols: Array.isArray(item.symbols) ? item.symbols.map(String) : undefined,
     source_pr: item.source_pr ? String(item.source_pr) : undefined,
+    // answers_query is produced by the knowledge-extraction template and used
+    // by saveKnowledgeBase to prepend the question to the embedding input,
+    // improving retrieval when the agent queries the KB with a question.
+    answers_query: item.answers_query ? String(item.answers_query) : undefined,
+    // signal_type is not produced by the review extraction template (only by
+    // the feedback extraction template), so it will always be undefined here.
+    // Included for symmetry so both parsers have the same output shape.
+    signal_type: undefined,
   }));
 }
 
@@ -301,7 +309,7 @@ export async function runKnowledgeExtraction(opts: {
 
   const piModel = resolveExtractionModel(modelName, opts.reviewPiModel);
 
-  const transcript = truncateTranscript(opts.transcript, 30_000);
+  const transcript = truncateTranscript(opts.transcript, 60_000);
   const prompt = buildExtractionPrompt({
     prUrl: opts.prUrl,
     targetRepo: opts.targetRepo,

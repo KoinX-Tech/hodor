@@ -477,13 +477,10 @@ export async function saveKnowledgeBase(
   // on the question text, not just the learning body. This means a future
   // agent query phrased as a question retrieves this point more reliably.
   const baseEmbeddingInput = buildEmbeddingInput(input);
-  const embeddingInput = input.answers_query?.trim()
-    ? `${input.answers_query.trim()}\n\n${baseEmbeddingInput}`
-    : baseEmbeddingInput;
 
   let vector: number[];
   try {
-    vector = await embedText(embeddingInput);
+    vector = await embedText(baseEmbeddingInput);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {

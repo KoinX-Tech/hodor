@@ -23,7 +23,10 @@ function getEmbeddingConfig(): EmbeddingConfig {
   };
 }
 
-async function callEmbeddingApi(config: EmbeddingConfig, input: string[]): Promise<number[][]> {
+async function callEmbeddingApi(
+  config: EmbeddingConfig,
+  input: string[],
+): Promise<number[][]> {
   const url = "https://api.openai.com/v1/embeddings";
   let lastError: Error | null = null;
 
@@ -43,7 +46,9 @@ async function callEmbeddingApi(config: EmbeddingConfig, input: string[]): Promi
 
       if (res.status === 429 || res.status >= 500) {
         const delay = BASE_DELAY_MS * 2 ** attempt;
-        logger.warn(`Embedding API returned ${res.status}, retrying in ${delay}ms...`);
+        logger.warn(
+          `Embedding API returned ${res.status}, retrying in ${delay}ms...`,
+        );
         await new Promise((resolve) => setTimeout(resolve, delay));
         continue;
       }
@@ -63,7 +68,9 @@ async function callEmbeddingApi(config: EmbeddingConfig, input: string[]): Promi
       lastError = err instanceof Error ? err : new Error(String(err));
       if (attempt < MAX_RETRIES - 1) {
         const delay = BASE_DELAY_MS * 2 ** attempt;
-        logger.warn(`Embedding API call failed, retrying in ${delay}ms: ${lastError.message}`);
+        logger.warn(
+          `Embedding API call failed, retrying in ${delay}ms: ${lastError.message}`,
+        );
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
@@ -88,8 +95,13 @@ export function buildEmbeddingInput(entry: {
   evidence: string;
   scope_tags?: string[];
   paths?: string[];
+  answers_query?: string;
 }): string {
-  const parts = [entry.learning, entry.evidence];
+  const parts = [
+    entry.answers_query ? `${entry.answers_query}\n\n` : "",
+    entry.learning,
+    entry.evidence,
+  ];
   if (entry.scope_tags?.length) parts.push(entry.scope_tags.join(" "));
   if (entry.paths?.length) parts.push(entry.paths.join(" "));
   return parts.join(" ");
