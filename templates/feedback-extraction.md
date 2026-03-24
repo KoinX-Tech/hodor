@@ -1,6 +1,6 @@
 # Feedback Learning Extraction
 
-You are analyzing human feedback on an AI code review. Your job is to extract **0–5 durable, reusable learnings** from the feedback that correct, clarify, or confirm the AI reviewer's understanding of the codebase.
+You are analyzing human feedback on an AI code review. Your job is to extract **0–5 durable, reusable learnings** from the feedback that correct, clarify, confirm, or explain the AI reviewer's findings about the codebase.
 
 **IMPORTANT: Be extremely selective.** Only extract learnings you are highly confident about. When in doubt, return an empty array. A false positive (saving wrong or low-quality knowledge) is far worse than a false negative (missing a learning that could be captured later).
 
@@ -21,59 +21,118 @@ You are analyzing human feedback on an AI code review. Your job is to extract **
 
 {feedback_comments}
 
+---
+
 ## What to Extract
 
-Analyze each **post-review feedback comment** and determine how it relates to Hodor's review findings. The prior discussion is provided only as context to help you understand the conversation — do NOT extract learnings from it directly.
+Analyze each **post-review feedback comment** and determine how it relates to Hodor's review findings. The prior discussion is provided only as context — do NOT extract learnings from it directly.
 
-Focus on extracting learnings **only** when the feedback:
+A learning is worth extracting whenever a human's comment reveals **a durable fact about how this codebase is designed or how it behaves** — regardless of whether they are correcting, clarifying, confirming, or dismissing a finding.
 
-1. **Corrects** a review finding — the reviewer was factually wrong about how the code works, and the human explains the correct behavior with specifics (function names, call paths, invariants)
-2. **Clarifies** architecture or design — the human provides new architectural or structural context about the codebase that would help future reviews of the same repository
-3. **Confirms** a non-obvious pattern — the human validates a finding AND explains the broader convention/invariant behind it that generalizes beyond this PR
+The key test: _would a future reviewer of this repository benefit from knowing this fact when analyzing a future PR?_ If yes, extract it. If it only helps understand this specific PR, skip it.
+
+---
+
+## Signal Types — Classify Each Comment as One
+
+| Type                    | Description                                                                                                                                                                            | Extract?                                                                                  |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `correction`            | Hodor was factually wrong. The human explains the **correct** behavior with specific evidence (function names, call paths, invariants).                                                | Yes — extract the correct behavior.                                                       |
+| `clarification`         | Human adds architectural or structural context not present in the review.                                                                                                              | Yes — if specific enough to be actionable in future reviews.                              |
+| `confirmation`          | Human validates a finding **and** explains the broader convention or invariant behind it.                                                                                              | Yes — extract the durable invariant, not the agreement itself.                            |
+| `dismissal_with_reason` | Human dismisses or deprioritizes a finding and gives a **codebase-specific reason** — e.g. "this is expected behavior", "that's handled by X upstream", "we intentionally use Y here". | Yes — the **reason** is often a durable design fact. Extract the fact, not the dismissal. |
+| `irrelevant`            | Vague agreement/disagreement, procedural comments, style opinions, sprint plans, "thanks", emoji.                                                                                      | No.                                                                                       |
+
+### How to Handle Dismissals
+
+A dismissal comment like _"P2 is expected behaviour, we require strings for specific accounts"_ contains a durable fact: the codebase intentionally uses string IDs for synthetic account nodes. Extract that fact. Do not extract the dismissal itself ("the reviewer ignored P2").
+
+A dismissal like _"ignoring P1 because it's highly unlikely"_ with no codebase-specific reason contains no durable fact — skip it.
+
+A dismissal like _"P3 is handled by the OpenAPI validator upstream"_ reveals that input validation for that layer is delegated to the OpenAPI schema — extract that architectural fact.
+
+The pattern: **if the human's reason for dismissing is codebase-specific, the reason itself is the learning.**
+
+---
+
+## Quality Bar — Good vs Bad
+
+**BAD — dismissal without codebase fact:**
+
+> "Ignoring P1 because it's highly unlikely."
+> "This isn't a real issue."
+
+**BAD — vague clarification:**
+
+> "This is handled elsewhere."
+> "We have guards for that."
+
+**BAD — learning is just a rephrased review finding:**
+
+> "The Redis guard uses `=== null` instead of falsy check." ← This is the bug Hodor found, not a codebase fact.
+
+**GOOD — design intent extracted from a dismissal:**
+
+> "Synthetic group node IDs in P&L and Cashflow reports (e.g., `'netPnl'`, `'operatingAssets'`) intentionally use string literals rather than ObjectIds — this is a deliberate stable-key design choice, not an accidental type change."
+
+**GOOD — upstream delegation extracted from a dismissal:**
+
+> "Multi-range timestamp input validation is intentionally delegated to the OpenAPI schema validator at the routing layer; the controller does not perform explicit structural validation of the `timestamps` query param."
+
+**GOOD — correction with concrete evidence:**
+
+> "The Redis service always initializes to either a client instance or `null`, never `undefined` — the `=== null` guard is therefore sufficient in all standard server contexts."
+
+---
 
 ## Confidence Requirements
 
-For each candidate learning, ask yourself:
+Before including any candidate, verify all four:
 
-- **Is this a durable fact about the codebase?** If the learning could become stale after a single refactor, skip it.
-- **Is the evidence concrete and specific?** Vague feedback like "that's handled elsewhere" without naming where is insufficient.
-- **Would a future reviewer of this repo benefit from knowing this?** If it only helps understand this specific PR, skip it.
-- **Does the feedback author demonstrate authority?** Corrections should come with specific code references, function names, or call chain descriptions — not just disagreement.
+1. **Is this a durable fact about the codebase?** If it could become stale after a single refactor, skip it.
+2. **Is the evidence concrete and specific?** Vague feedback without function names, paths, or call-chain descriptions is insufficient.
+3. **Would a future reviewer of this repo benefit from knowing this?** If it only helps understand this specific PR's diff, skip it.
+4. **Does the feedback author demonstrate authority?** Corrections and clarifications should come with specific code references or explicit design intent — not just disagreement.
 
-If ANY of these checks fail, do NOT include the candidate.
+If ANY check fails, do not include the candidate.
 
-## Classification Rules
+---
 
-For each piece of feedback, classify it as one of:
+## Strict Rejection Criteria — DO NOT extract if ANY apply
 
-- `correction`: Hodor's finding was factually wrong. The human explains the correct behavior with specific evidence. Extract the **correct** behavior as the learning.
-- `clarification`: Feedback adds new architectural/design context not present in the review. Extract only if the explanation is specific enough to be actionable.
-- `confirmation`: Feedback validates a finding and explains the broader convention. Extract only if the explanation reveals a durable invariant or pattern.
-- `irrelevant`: Everything else — skip entirely.
+**Content filters:**
 
-## Strict Rejection Criteria — DO NOT extract if ANY of these apply
-
-- Subjective opinions or style preferences ("I think this approach is better", "we prefer X over Y")
-- Temporary workarounds or sprint-scoped explanations ("we're fixing this next sprint", "this is a known issue")
-- Feedback that simply agrees/disagrees without explaining why or providing evidence
-- PR-specific details that won't generalize to future reviews of the same repository
-- Duplicates of what Hodor already correctly identified in the review
-- Feedback that refers to code not visible in the PR diff or review
+- Subjective opinions or style preferences
+- Temporary workarounds or sprint-scoped explanations ("we're fixing this next sprint")
+- Feedback that simply agrees or disagrees without a codebase-specific reason
+- Duplicates of what Hodor already correctly identified
+- Feedback referring to code not visible in the PR diff or review
 - Vague or hand-wavy explanations ("it's handled somewhere", "there's a guard for that")
-- Feedback about test coverage, documentation, or non-functional concerns unless it reveals a structural invariant
-- Conversational noise ("thanks", "good catch", "LGTM", emoji-only responses)
-- Feedback where the correction itself might be wrong (conflicting information, uncertain language like "I think", "maybe", "probably")
+- Conversational noise ("thanks", "good catch", "LGTM", emoji-only)
+- Feedback where the correction might itself be wrong (uncertain language: "I think", "maybe", "probably")
+
+**Quality filters:**
+
+- `answers_query` field not specific enough to represent a real future reviewer question
+- Learning text shorter than 60 characters
+- Evidence text shorter than 40 characters
+- No specific file paths, class names, function names, or design decision anchoring the claim
+- Stability would be rated "low"
+
+---
 
 ## Output Format
 
-Respond with a JSON array. Each element must match this schema:
+Respond with a JSON array. Each element must match this schema exactly:
 
 ```json
 [
   {
-    "learning": "<durable fact, ≥40 chars, uses factual signal words like 'always', 'must', 'before', 'after', 'through', 'uses', 'returns', 'maps'>",
+    "answers_query": "<the specific question a future reviewer would ask that this learning answers, ≥10 words>",
+    "learning": "<durable declarative fact about the codebase, ≥60 chars — describes how the code IS, not what was found or fixed>",
+    "signal_type": "correction | clarification | confirmation | dismissal_with_reason",
     "category": "architecture | coding_pattern | service_call_chain | fundamental_design",
-    "evidence": "<the specific feedback quote or paraphrase that supports this learning, ≥30 chars>",
+    "evidence": "<the specific feedback quote or paraphrase that supports this, ≥40 chars>",
     "stability": "medium | high",
     "scope_tags": ["<1-5 topic tags>"],
     "paths": ["<relevant file paths mentioned in feedback or review>"],
@@ -83,14 +142,13 @@ Respond with a JSON array. Each element must match this schema:
 ]
 ```
 
-## Stability Guidelines
+**Before finalizing each entry, apply this self-check:**
 
-- `high`: The feedback corrects a clear factual error with specific evidence, or describes a well-established convention backed by concrete code references
-- `medium`: The feedback provides useful structural context but the author's certainty or the pattern's scope is unclear
+1. Does `answers_query` represent a question a future reviewer would actually ask? If not, discard.
+2. Does `learning` describe an established codebase fact with zero trace of the review finding or reviewer judgment? If it references what Hodor found, flagged, or recommended — rewrite or discard.
+3. Is `evidence` grounded in something the human actually said, with enough specificity to be verifiable? If not, discard.
 
-**Default to `medium` unless the evidence is very strong.**
-
-If no durable learnings can be confidently extracted from the feedback, return an empty array: `[]`
+If no durable learnings survive these checks, return an empty array: `[]`
 
 Returning an empty array is perfectly acceptable and preferred over extracting low-quality learnings.
 

@@ -96,6 +96,14 @@ export interface SaveKnowledgeInput {
   paths?: string[];
   symbols?: string[];
   source_pr?: string;
+  /** The specific question a future reviewer would ask that this learning answers. Used to improve embedding retrieval. */
+  answers_query?: string;
+  /** Source signal type for learnings extracted from post-review feedback. Stored as payload metadata. */
+  signal_type?:
+    | "correction"
+    | "clarification"
+    | "confirmation"
+    | "dismissal_with_reason";
 }
 
 export interface QueryKnowledgeInput {
@@ -116,6 +124,8 @@ export interface KnowledgeQueryMatch {
   symbols: string[];
   sourcePrs: string[];
   confidence: number;
+  /** The question this learning was extracted to answer, if recorded. */
+  answersQuery: string;
 }
 
 export interface QueryKnowledgeResult {
@@ -157,14 +167,17 @@ export function isHighSignalCandidate(input: SaveKnowledgeInput): {
   if (input.stability === "low") {
     return { accepted: false, reason: "stability must be medium or high" };
   }
-  if (input.learning.trim().length < 40) {
+  if (input.learning.trim().length < 60) {
     return {
       accepted: false,
-      reason: "learning is too short for durable reuse",
+      reason: "learning is too short — must be ≥60 chars to ensure specificity",
     };
   }
-  if (input.evidence.trim().length < 30) {
-    return { accepted: false, reason: "evidence is too short" };
+  if (input.evidence.trim().length < 40) {
+    return {
+      accepted: false,
+      reason: "evidence is too short — must be ≥40 chars",
+    };
   }
   const lowercaseLearning = input.learning.toLowerCase();
   if (
@@ -204,12 +217,16 @@ export function isHighSignalCandidate(input: SaveKnowledgeInput): {
   const factualSignalPatterns = [
     "always",
     "must",
+    "never",
+    "requires",
     "before",
     "after",
     "through",
     "uses",
     "returns",
     "maps",
+    "intentionally",
+    "delegated",
   ];
   if (
     !factualSignalPatterns.some((pattern) =>
@@ -218,7 +235,8 @@ export function isHighSignalCandidate(input: SaveKnowledgeInput): {
   ) {
     return {
       accepted: false,
-      reason: "learning must express a durable behavioral/structural fact",
+      reason:
+        "learning must express a durable behavioral/structural fact using signal words (always, must, never, requires, intentionally, delegated, etc.)",
     };
   }
   return { accepted: true };
@@ -265,7 +283,9 @@ function getQdrantConfig(config: KnowledgeBaseConfig): QdrantConfig {
   return { url: config.qdrantUrl, apiKey: config.qdrantApiKey };
 }
 
-async function ensureKbCollectionAndIndexes(config: KnowledgeBaseConfig): Promise<void> {
+async function ensureKbCollectionAndIndexes(
+  config: KnowledgeBaseConfig,
+): Promise<void> {
   const qdrant = getQdrantConfig(config);
   await ensureCollection(qdrant, KB_COLLECTION, EMBEDDING_DIMENSION);
   for (const field of KB_FILTER_INDEX_FIELDS) {
@@ -326,18 +346,25 @@ export async function checkKnowledgeBaseHealth(
     };
   }
 
-  // Ensure required indexes exist for filtered search (safe if already present)
   try {
     await ensurePayloadIndex(qdrant, KB_COLLECTION, "target_repo", "keyword");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, collectionReady: true, writable: false, reason: `Failed to ensure payload index: ${msg}` };
+    return {
+      ok: false,
+      collectionReady: true,
+      writable: false,
+      reason: `Failed to ensure payload index: ${msg}`,
+    };
   }
 
   return { ok: true, collectionReady: true, writable: config.writeEnabled };
 }
 
-export async function checkEmbeddingModelConnectivity(): Promise<{ ok: boolean; reason?: string }> {
+export async function checkEmbeddingModelConnectivity(): Promise<{
+  ok: boolean;
+  reason?: string;
+}> {
   try {
     const vector = await embedText("knowledge embedding preflight probe");
     if (!Array.isArray(vector) || vector.length === 0) {
@@ -399,6 +426,7 @@ export async function queryKnowledgeBase(
       symbols: (hit.payload.symbols as string[]) ?? [],
       sourcePrs: (hit.payload.source_prs as string[]) ?? [],
       confidence: Number(hit.score.toFixed(4)),
+      answersQuery: String(hit.payload.answers_query ?? ""),
     }));
 
     const queryPaths = normalizeList(query.paths);
@@ -444,7 +472,14 @@ export async function saveKnowledgeBase(
   }
 
   const repoId = normalizeRepoId(targetRepo);
-  const embeddingInput = buildEmbeddingInput(input);
+
+  // Prepend answers_query to the embedding input so vector search matches
+  // on the question text, not just the learning body. This means a future
+  // agent query phrased as a question retrieves this point more reliably.
+  const baseEmbeddingInput = buildEmbeddingInput(input);
+  const embeddingInput = input.answers_query?.trim()
+    ? `${input.answers_query.trim()}\n\n${baseEmbeddingInput}`
+    : baseEmbeddingInput;
 
   let vector: number[];
   try {
@@ -492,6 +527,10 @@ export async function saveKnowledgeBase(
           input.source_pr ? [input.source_pr] : [],
         ),
       };
+      // Promote answers_query if the existing point doesn't have one
+      if (input.answers_query?.trim() && !existing.payload.answers_query) {
+        mergedPayload.answers_query = input.answers_query.trim();
+      }
 
       await updatePayload(qdrant, KB_COLLECTION, existing.id, mergedPayload);
       logger.info(
@@ -515,6 +554,8 @@ export async function saveKnowledgeBase(
           paths: normalizeList(input.paths),
           symbols: normalizeList(input.symbols),
           source_prs: input.source_pr ? [input.source_pr] : [],
+          answers_query: input.answers_query?.trim() ?? "",
+          ...(input.signal_type ? { signal_type: input.signal_type } : {}),
           created_at: now,
           updated_at: now,
           observations: 1,

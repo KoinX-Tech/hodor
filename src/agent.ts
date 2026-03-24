@@ -672,16 +672,33 @@ export async function reviewPr(opts: {
         }
 
         const summary = result.matches
-          .map(
-            (match, index) =>
-              `${index + 1}. [${match.category}] ${match.learning} (confidence: ${match.confidence})`,
-          )
-          .join("\n");
+          .map((match, index) => {
+            const lines: string[] = [
+              `${index + 1}. [${match.category}] (confidence: ${match.confidence})`,
+            ];
+            // Show the question this learning was extracted to answer first —
+            // helps the agent judge whether the retrieved fact is relevant to
+            // its current query before reading the full learning text.
+            if (match.answersQuery) {
+              lines.push(`   Q: ${match.answersQuery}`);
+            }
+            lines.push(`   ${match.learning}`);
+            // Surface any associated file paths and symbols so the agent can
+            // immediately cross-reference them against the current diff scope.
+            if (match.paths.length > 0) {
+              lines.push(`   paths: ${match.paths.join(", ")}`);
+            }
+            if (match.symbols.length > 0) {
+              lines.push(`   symbols: ${match.symbols.join(", ")}`);
+            }
+            return lines.join("\n");
+          })
+          .join("\n\n");
         return {
           content: [
             {
               type: "text",
-              text: `Matched prior learnings:\n${summary}`,
+              text: `Matched prior learnings:\n\n${summary}`,
             },
           ],
           details: { ok: true, matches: result.matches },

@@ -333,6 +333,10 @@ export function parseFeedbackResponse(raw: string): SaveKnowledgeInput[] {
     paths: Array.isArray(item.paths) ? item.paths.map(String) : undefined,
     symbols: Array.isArray(item.symbols) ? item.symbols.map(String) : undefined,
     source_pr: item.source_pr ? String(item.source_pr) : undefined,
+    answers_query: item.answers_query ? String(item.answers_query) : undefined,
+    signal_type: item.signal_type
+      ? (String(item.signal_type) as SaveKnowledgeInput["signal_type"])
+      : undefined,
   }));
 }
 
