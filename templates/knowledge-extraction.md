@@ -28,6 +28,10 @@ A future reviewer will query a knowledge base with questions like:
 
 Each learning you extract must be a **direct, complete answer to a question like those above** — grounded in something the review transcript confirmed about the codebase. If you cannot phrase a candidate learning as a specific question a future reviewer would actually ask, discard it.
 
+## What This Knowledge Base Is For
+
+The knowledge base is **not** a copy of the repository's documentation. It captures only what was **discovered by examining actual code** during a review — runtime behaviors, edge cases, call-chain constraints, and failure modes that static documentation does not describe. If a learning could have been written by someone who only read `AGENTS.md` and its linked docs without ever looking at the PR diff, it does not belong here.
+
 ---
 
 ## What to Extract
@@ -38,6 +42,7 @@ Extract learnings that describe **how this repository permanently works** — it
 - Grounded in concrete evidence from the review transcript (file paths, function names, or observed code behavior)
 - Specific enough that a reviewer could apply it to unrelated future PRs in the same repo
 - Phrased as a **declarative statement of established behavior**, not a recommendation or criticism
+- Something that could **not** have been derived solely from reading the repository's documentation files
 
 ---
 
@@ -63,13 +68,21 @@ Extract learnings that describe **how this repository permanently works** — it
 > "This service doesn't follow the singleton export pattern"
 > "Error handling was found to be incomplete in this change"
 
-**GOOD — specific, answerable, durable:**
+**BAD — restates what is already in static documentation:**
 
-> "All service classes in `server/api/services/` must export a singleton instance via `export default new ClassName()` — any method used as a callback must be pre-bound in the constructor to preserve `this` context"
-> "MongoDB access must always go through a Repository class in `server/api/repositories/`; direct Mongoose model usage in services or controllers violates the data access contract"
-> "Custom error classes in `server/api/services/helpers/errors/` must be thrown instead of generic `Error` — callers and middleware rely on the custom type for error classification and HTTP status mapping"
+> "All service classes must export a singleton instance via `export default new ClassName()`" ← already in `docs/patterns/services.md`
+> "MongoDB access must always go through a Repository class" ← already in `docs/infra/mongodb.md`
+> "Custom error classes must be thrown instead of generic Error" ← already in `docs/patterns/errors.md`
 
-The difference: a good learning names the specific directory, class, or mechanism and explains _why_ the contract exists, not just that it does.
+These facts are already captured in the repo's documentation. Re-extracting them adds no value and creates near-duplicate embeddings in the knowledge base.
+
+**GOOD — specific, answerable, durable, discovered from code not docs:**
+
+> "When `UserService.resolveAccount()` receives a `null` userId, it silently returns an empty object rather than throwing — callers in `BillingService` and `NotificationService` depend on this behavior and will mishandle the null path if it is changed to throw"
+> "The NATS `orderEvents` stream requires subjects to be registered in `eventRegistry.js` before the first publish call at startup; late registration causes dropped events with no error logged, confirmed in `server/common/nats.js` initialization sequence"
+> "MongoDB aggregation pipelines in `AnalyticsRepository` apply a default 30-day time filter even when the caller passes an explicit date range, because the `$match` stage appends rather than replaces the range condition"
+
+The difference: a good learning names a specific runtime behavior, a concrete failure mode, or a non-obvious call-chain constraint that a reviewer would only discover by reading the actual code.
 
 ---
 
@@ -81,6 +94,13 @@ The difference: a good learning names the specific directory, class, or mechanis
 - The learning uses language like "should", "must be fixed", "was missing", "the PR introduces", "this change", "the author", "as noted", "the finding"
 - The learning is only true because of something this PR changed or broke — it is not a pre-existing codebase fact
 - The learning describes what a reviewer said, recommended, or flagged
+
+**Static documentation contamination (second most common failure — check every candidate):**
+
+- The learning is already captured in `AGENTS.md` or any of its linked docs (`docs/patterns/*`, `docs/infra/*`, `docs/guides/coding-guidelines.md`, etc.)
+- The learning restates a convention that is explicitly documented in the repository — singleton export pattern, repository-only data access, custom error classes, async/await requirement, etc.
+- The evidence for the learning is "the reviewer read doc X" or "the agent noted that the pattern requires Y" rather than "the reviewer observed X in the actual diff or runtime code path"
+- The learning could have been written by someone who only read the repository documentation without examining the PR diff at all
 
 **Insufficient durability:**
 
@@ -115,16 +135,25 @@ Respond with a JSON array. Each element must match this schema exactly:
     "symbols": [
       "<relevant function/class/variable names observed in the review>"
     ],
-    "source_pr": "{pr_url}"
+    "source_pr": "{pr_url}",
+    "source": "diff_observation | runtime_inference"
   }
 ]
 ```
+
+**`source` field values:**
+
+- `diff_observation`: the learning was derived directly from reading changed or surrounding code in the diff
+- `runtime_inference`: the learning describes a runtime behavior or call-chain constraint inferred from how the code executes, not just how it is written
+
+Do not use either value for learnings that are primarily derived from reading documentation files. Those should be rejected entirely.
 
 **Before finalizing each entry, apply this self-check:**
 
 1. Could a reviewer querying `answers_query` word-for-word find this learning useful? If no, discard.
 2. Does the `learning` field read as an established codebase fact, with no trace of PR findings or reviewer judgments? If no, discard.
 3. Is the `evidence` field grounded in something the transcript actually showed (a file, a function, observed behavior)? If no, discard.
+4. Could this learning have been written by someone who only read `AGENTS.md` and its linked docs, without examining the diff? If yes, discard.
 
 If no durable learnings survive these checks, return an empty array: `[]`
 

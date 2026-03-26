@@ -9,7 +9,6 @@ import {
   ensureCollection,
   ensurePayloadIndex,
   upsertPoints,
-  updatePayload,
   searchPoints,
   checkHealth,
   collectionExists,
@@ -20,6 +19,7 @@ import { logger } from "./utils/logger.js";
 
 const KB_COLLECTION = "hodor-kb";
 const DEFAULT_DEDUP_THRESHOLD = 0.85;
+const DEFAULT_MIN_CONFIDENCE = 0.55;
 const KB_FILTER_INDEX_FIELDS = ["target_repo"] as const;
 
 export const QUERY_KNOWLEDGE_BASE_SCHEMA = Type.Object(
@@ -74,6 +74,7 @@ export interface KnowledgeBaseConfig {
   defaultMaxResults: number;
   embeddingModel: string;
   dedupThreshold: number;
+  minConfidence: number;
 }
 
 export interface KnowledgeBaseHealth {
@@ -103,7 +104,8 @@ export interface SaveKnowledgeInput {
     | "correction"
     | "clarification"
     | "confirmation"
-    | "dismissal_with_reason";
+    | "dismissal_with_reason"
+    | "kb_correction";
 }
 
 export interface QueryKnowledgeInput {
@@ -132,6 +134,7 @@ export interface QueryKnowledgeResult {
   ok: boolean;
   reason?: string;
   matches: KnowledgeQueryMatch[];
+  pathSymbolFallback?: boolean;
 }
 
 export interface SaveKnowledgeResult {
@@ -263,6 +266,15 @@ export function getKnowledgeBaseConfig(): KnowledgeBaseConfig {
   const dedupRaw = Number.parseFloat(
     process.env.HODOR_KB_DEDUP_THRESHOLD ?? "",
   );
+  const minConfidenceRaw = Number.parseFloat(
+    process.env.HODOR_KB_MIN_CONFIDENCE ?? "",
+  );
+  const minConfidence =
+    Number.isFinite(minConfidenceRaw) &&
+    minConfidenceRaw > 0 &&
+    minConfidenceRaw <= 1
+      ? minConfidenceRaw
+      : DEFAULT_MIN_CONFIDENCE;
   const dedupThreshold =
     Number.isFinite(dedupRaw) && dedupRaw > 0 && dedupRaw <= 1
       ? dedupRaw
@@ -276,6 +288,7 @@ export function getKnowledgeBaseConfig(): KnowledgeBaseConfig {
     defaultMaxResults,
     embeddingModel,
     dedupThreshold,
+    minConfidence,
   };
 }
 
@@ -406,6 +419,17 @@ export async function queryKnowledgeBase(
   const filter: QdrantFilter = { must: mustConditions };
   const limit = query.max_results ?? config.defaultMaxResults;
 
+  // Fetch more candidates when paths/symbols are specified so the
+  // post-retrieval filter has enough to work with. Without this, the filter
+  // operates on too small a set and produces false "no match" responses.
+  const hasPathSymbolFilter =
+    (query.paths?.length ?? 0) > 0 || (query.symbols?.length ?? 0) > 0;
+  const fetchLimit = hasPathSymbolFilter ? Math.max(limit * 4, 20) : limit;
+
+  // Apply a minimum confidence threshold so low-relevance matches
+  // are not returned to the agent. Configurable; defaults to 0.55.
+  const minConfidence = config.minConfidence ?? 0.55;
+
   const qdrant = getQdrantConfig(config);
   try {
     const results = await searchPoints(
@@ -413,24 +437,29 @@ export async function queryKnowledgeBase(
       KB_COLLECTION,
       queryVector,
       filter,
-      limit,
+      fetchLimit,
     );
-    const matches: KnowledgeQueryMatch[] = results.map((hit) => ({
-      id: hit.id,
-      learning: String(hit.payload.learning ?? ""),
-      category: hit.payload.category as KnowledgeQueryMatch["category"],
-      evidence: String(hit.payload.evidence ?? ""),
-      stability: hit.payload.stability as KnowledgeQueryMatch["stability"],
-      scopeTags: (hit.payload.scope_tags as string[]) ?? [],
-      paths: (hit.payload.paths as string[]) ?? [],
-      symbols: (hit.payload.symbols as string[]) ?? [],
-      sourcePrs: (hit.payload.source_prs as string[]) ?? [],
-      confidence: Number(hit.score.toFixed(4)),
-      answersQuery: String(hit.payload.answers_query ?? ""),
-    }));
+
+    const matches: KnowledgeQueryMatch[] = results
+      // Filter by minimum confidence before any further processing.
+      .filter((hit) => hit.score >= minConfidence)
+      .map((hit) => ({
+        id: hit.id,
+        learning: String(hit.payload.learning ?? ""),
+        category: hit.payload.category as KnowledgeQueryMatch["category"],
+        evidence: String(hit.payload.evidence ?? ""),
+        stability: hit.payload.stability as KnowledgeQueryMatch["stability"],
+        scopeTags: (hit.payload.scope_tags as string[]) ?? [],
+        paths: (hit.payload.paths as string[]) ?? [],
+        symbols: (hit.payload.symbols as string[]) ?? [],
+        sourcePrs: (hit.payload.source_prs as string[]) ?? [],
+        confidence: Number(hit.score.toFixed(4)),
+        answersQuery: String(hit.payload.answers_query ?? ""),
+      }));
 
     const queryPaths = normalizeList(query.paths);
     const querySymbols = normalizeList(query.symbols);
+
     const filtered = matches.filter((m) => {
       if (queryPaths.length > 0 && !queryPaths.some((p) => m.paths.includes(p)))
         return false;
@@ -442,7 +471,22 @@ export async function queryKnowledgeBase(
       return true;
     });
 
-    return { ok: true, matches: filtered };
+    // If path/symbol filtering eliminated everything, fall back to
+    // the top results by semantic similarity and tell the agent what happened.
+    // This prevents a false "no matches" response caused by path string mismatches
+    // between what the agent passes and what was stored during extraction.
+    const usedFallback =
+      hasPathSymbolFilter && filtered.length === 0 && matches.length > 0;
+    const finalMatches = usedFallback
+      ? matches.slice(0, limit)
+      : filtered.slice(0, limit);
+
+    return {
+      ok: true,
+      matches: finalMatches,
+      // Surface fallback status so the tool response can note it to the agent.
+      pathSymbolFallback: usedFallback,
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn(`Qdrant search failed: ${msg}`);
@@ -462,7 +506,7 @@ export async function saveKnowledgeBase(
     return {
       ok: false,
       status: "disabled",
-      reason: "Knowledge base writes disabled by HODOR_KB_WRITE_ENABLED",
+      reason: "Knowledge base writes disabled",
     };
   }
 
@@ -472,10 +516,6 @@ export async function saveKnowledgeBase(
   }
 
   const repoId = normalizeRepoId(targetRepo);
-
-  // Prepend answers_query to the embedding input so vector search matches
-  // on the question text, not just the learning body. This means a future
-  // agent query phrased as a question retrieves this point more reliably.
   const baseEmbeddingInput = buildEmbeddingInput(input);
 
   let vector: number[];
@@ -507,35 +547,58 @@ export async function saveKnowledgeBase(
 
     if (dedupResults.length > 0) {
       const existing = dedupResults[0];
-      const mergedPayload: Record<string, unknown> = {
-        observations: (Number(existing.payload.observations) || 1) + 1,
-        updated_at: now,
-        paths: mergeArrays(existing.payload.paths, normalizeList(input.paths)),
-        symbols: mergeArrays(
-          existing.payload.symbols,
-          normalizeList(input.symbols),
-        ),
-        scope_tags: mergeArrays(
-          existing.payload.scope_tags,
-          normalizeList(input.scope_tags),
-        ),
-        source_prs: mergeArrays(
-          existing.payload.source_prs,
-          input.source_pr ? [input.source_pr] : [],
-        ),
-      };
-      // Promote answers_query if the existing point doesn't have one
-      if (input.answers_query?.trim() && !existing.payload.answers_query) {
-        mergedPayload.answers_query = input.answers_query.trim();
-      }
 
-      await updatePayload(qdrant, KB_COLLECTION, existing.id, mergedPayload);
+      // Upsert the full point rather than patching payload only.
+      // The new learning text replaces the old one — this is the correction
+      // path. The new vector reflects the updated learning content so future
+      // similarity searches find the corrected version, not the stale one.
+      // History (paths, symbols, source_prs) is merged from both versions.
+      await upsertPoints(qdrant, KB_COLLECTION, [
+        {
+          id: existing.id, // same ID — replaces vector and payload in place
+          vector, // re-embedded from new learning text
+          payload: {
+            target_repo: repoId,
+            learning: input.learning.trim(), // new learning wins
+            category: input.category,
+            evidence: input.evidence.trim(), // new evidence wins
+            stability: input.stability,
+            scope_tags: mergeArrays(
+              existing.payload.scope_tags,
+              normalizeList(input.scope_tags),
+            ),
+            paths: mergeArrays(
+              existing.payload.paths,
+              normalizeList(input.paths),
+            ),
+            symbols: mergeArrays(
+              existing.payload.symbols,
+              normalizeList(input.symbols),
+            ),
+            source_prs: mergeArrays(
+              existing.payload.source_prs,
+              input.source_pr ? [input.source_pr] : [],
+            ),
+            answers_query:
+              input.answers_query?.trim() ||
+              existing.payload.answers_query ||
+              "",
+            signal_type:
+              input.signal_type ?? existing.payload.signal_type ?? "",
+            created_at: existing.payload.created_at, // preserve original creation time
+            updated_at: now,
+            observations: (Number(existing.payload.observations) || 1) + 1,
+          },
+        },
+      ]);
+
       logger.info(
-        `Merged duplicate learning into existing point ${existing.id} (score: ${existing.score.toFixed(3)})`,
+        `Updated existing KB entry ${existing.id} with new learning (similarity: ${existing.score.toFixed(3)})`,
       );
       return { ok: true, status: "updated", entryId: existing.id };
     }
 
+    // No similar entry found — insert as new.
     const pointId = randomUUID();
     await upsertPoints(qdrant, KB_COLLECTION, [
       {
@@ -552,7 +615,7 @@ export async function saveKnowledgeBase(
           symbols: normalizeList(input.symbols),
           source_prs: input.source_pr ? [input.source_pr] : [],
           answers_query: input.answers_query?.trim() ?? "",
-          ...(input.signal_type ? { signal_type: input.signal_type } : {}),
+          signal_type: input.signal_type ?? "",
           created_at: now,
           updated_at: now,
           observations: 1,

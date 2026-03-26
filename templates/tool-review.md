@@ -56,12 +56,15 @@ The `+new_start` value is the first new-file line number in that hunk. Count for
 
 ### Other tools
 
-| Command                | Purpose                                                                                                       |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `grep`                 | Search for patterns across multiple files                                                                     |
-| `read`                 | Read full file context (use sparingly, only when git diff is insufficient)                                    |
-| `query_knowledge_base` | Retrieve durable prior learnings (architecture, stable call chains, coding patterns) relevant to current diff |
-| `submit_review`        | Submit the final structured review                                                                            |
+| Command                | Purpose                                                                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `grep`                 | Search for patterns across multiple files                                                                                |
+| `read`                 | Read full file context (use sparingly, only when git diff is insufficient)                                               |
+| `query_knowledge_base` | Retrieve edge-case and runtime knowledge discovered from prior PR reviews — complements but does not duplicate AGENTS.md |
+| `submit_review`        | Submit the final structured review                                                                                       |
+
+> **`query_knowledge_base` vs AGENTS.md**: These are complementary, not overlapping sources. AGENTS.md holds intentional design documentation that the team wrote down. The knowledge base holds edge cases, runtime behaviors, call-chain details, and failure modes discovered _during past code reviews_ — things no documentation file captures. Always query the KB before reading docs, and treat the two sources as covering different layers of understanding.
+> **KB entries vs PR conversation**: When a KB learning conflicts with something an engineer has stated in this PR's comments, the PR comment takes precedence. KB entries reflect past observations and may be stale or wrong for this specific codebase state. If you find a conflict, note it in `confidence_notes` and reason from the PR conversation, not the KB entry.
 
 **Execution style constraints (MANDATORY):**
 
@@ -73,9 +76,13 @@ The `+new_start` value is the first new-file line number in that hunk. Count for
 
 ## Review Process
 
-**inspect leads. git confirms. You decide.**
+**inspect leads. KB fills gaps docs don't cover. git confirms. You decide.**
 
-### Phase 1: Semantic Triage (MANDATORY — complete before any git diff)
+<!-- CHANGED: Updated phase summary to reflect new order -->
+
+### Phase 1: Semantic Triage (MANDATORY — complete all steps in order before any git diff)
+
+<!-- CHANGED: Step 1a unchanged -->
 
 **Step 1a — Get risk-sorted entity map and verdict:**
 
@@ -92,6 +99,8 @@ Read the verdict first:
 
 From the entity list, build your review agenda ordered by risk. Note each entity's `filePath`, risk level, classification, and `blast` score.
 
+<!-- CHANGED: Step 1b unchanged -->
+
 **Step 1b — Get complete file list:**
 
 ```bash
@@ -100,14 +109,26 @@ From the entity list, build your review agenda ordered by risk. Note each entity
 
 Any file not covered by `inspect` (YAML, configs, markdown, test fixtures) must be manually reviewed with `git diff` in Phase 2.
 
-**Step 1c — Query durable prior knowledge (MANDATORY):**
+<!-- CHANGED: Step 1c is now KB queries, moved before AGENTS.md. Entire step rewritten. -->
 
-The knowledge base is indexed by the question each learning was extracted to answer. **Queries that match those questions score highest.** Write each query as a short, single-concern question — the same way a human would search a wiki: _"How must service singletons be exported?"_ not _"Tell me about services and Redis and error handling in this PR."_
+**Step 1c — Query the knowledge base (MANDATORY — complete before Step 1d):**
+
+**Do not proceed to Step 1d until all queries in this step are complete.** The knowledge base contains accumulated runtime knowledge from prior reviews that is not present in any documentation file. You must query it now, while your only context is the entity map from Step 1a, so that its findings are not crowded out by documentation.
+
+The knowledge base is indexed by the question each learning was extracted to answer. Queries that match those questions score highest. Write each query as a short, single-concern question — the same way a human would search a wiki.
+
+**What the KB covers that AGENTS.md does not:**
+
+- Edge cases and input conditions that break specific call chains
+- Race conditions or ordering constraints observed in prior reviews
+- Which callers were found to be incompatible with a changed signature
+- Error paths found incomplete or incorrectly handled in practice
+- Runtime behaviors that diverge from documented intent
 
 **How to form queries:**
 
 - One question per call, 10–20 words max.
-- Phrase as a direct question about the repo's design: _"What pattern governs MongoDB access?"_ / _"How should custom errors be thrown in service classes?"_ / _"What is the correct Redis client for cache operations?"_
+- Phrase as a direct question about the repo's runtime behavior or implementation detail: _"What edge cases break the payment settlement flow?"_ / _"Which callers depend on the exact error type thrown by UserService?"_ / _"What ordering constraint exists between NATS event registration and publishing?"_
 - Scope to a subsystem or file type, not to this specific PR's changes.
 - Pass `paths` and `symbols` from high-risk entities to boost matching precision.
 
@@ -115,27 +136,27 @@ The knowledge base is indexed by the question each learning was extracted to ans
 
 From the `inspect` output and changed file list, identify every distinct subsystem or pattern the PR touches. Issue **one query per subsystem** — do not batch multiple concerns into one call. For a typical PR touching 2–4 subsystems, that means 2–4 queries upfront. Common examples:
 
-| PR touches…              | Example query                                                                |
-| ------------------------ | ---------------------------------------------------------------------------- |
-| Service files            | _"How must service classes export their singleton instance?"_                |
-| Repository / data access | _"What pattern governs MongoDB access in this repo?"_                        |
-| Redis usage              | _"Which Redis client should be used for cache vs persistent KV operations?"_ |
-| Error handling           | _"What error classes must be thrown instead of generic Error?"_              |
-| NATS / event messaging   | _"How must events be registered before publishing to NATS?"_                 |
-| Worker files             | _"How are worker pool tasks submitted and how do they report errors?"_       |
+| PR touches…              | Example query                                                                        |
+| ------------------------ | ------------------------------------------------------------------------------------ |
+| Service files            | _"What runtime failures have been found in service singleton initialization?"_       |
+| Repository / data access | _"What edge cases break MongoDB repository calls in this repo?"_                     |
+| Redis usage              | _"What ordering or client-selection errors have been observed in Redis operations?"_ |
+| Error handling           | _"Which error paths in service classes were found incomplete in past reviews?"_      |
+| NATS / event messaging   | _"What race conditions exist between NATS event registration and first publish?"_    |
+| Worker files             | _"What failure modes have been observed in worker pool task submission?"_            |
 
 **After each query:**
 
 - Matches returned: treat as context, not truth — confirm against the current diff before relying on them.
 - No match: note the open question in a lightweight ledger. Before submission, close every open question with an evidence-backed conclusion drawn from code and diff.
 
-**During Phase 2 and Phase 3**, call `query_knowledge_base` again whenever you encounter a pattern or subsystem not yet queried. The goal is zero unqueried high-risk subsystems before submission.
-
 **Step 1d — Load repository conventions from AGENTS.md (MANDATORY when available):**
 
-This step has two sub-passes that happen at different points in your workflow. Do not collapse them into one.
+You have now completed KB queries. Proceed to read AGENTS.md to understand documented conventions. The KB and AGENTS.md cover different layers — use the KB findings from Step 1c as the lens through which you read the docs, looking for gaps or divergences.
 
-**Pass 1 — Read AGENTS.md immediately (before inspect):**
+This step has two sub-passes:
+
+**Pass 1 — Read AGENTS.md immediately:**
 
 ```bash
 read AGENTS.md
@@ -174,6 +195,12 @@ During **Phase 2**, if you encounter a code pattern or subsystem you did not ant
 
 Work through your agenda in risk order: **CRITICAL → HIGH → MEDIUM → uncovered files from Step 1b**.
 
+**Mandatory KB checkpoint before forming CRITICAL or HIGH findings:**
+
+Before forming any finding on a CRITICAL or HIGH entity, run one `query_knowledge_base` call scoped to that entity's subsystem. This is required, not optional. Log the query and its result in your analysis notes. This ensures the KB is consulted on the highest-risk code even if Step 1c returned no matches for that subsystem.
+
+Example: if you are about to flag a bug in `PaymentService.settle()`, first query: _"What prior issues or edge cases were found in the payment settlement flow?"_ before writing the finding.
+
 **For each entity, follow these rules before running `git diff`:**
 
 - **CRITICAL or HIGH**: Always run `git diff` — mandatory
@@ -207,6 +234,7 @@ When reviewing a diff, actively compare the new code against patterns and rules 
 - NEVER flag "files will be deleted when merging" (outdated branch)
 - NEVER flag "dependency version downgrade" (branch not rebased)
 - NEVER compare entire codebase to `{target_branch}` — diff only
+- If a KB entry contradicts a statement made by an engineer in the PR discussion (visible in the prior review context or MR comments), treat the engineer's statement as ground truth. Do not file a finding based solely on a KB entry that the PR conversation has already addressed.
 
 ### Phase 3: Deep Dive (when diff context is insufficient)
 
@@ -306,7 +334,7 @@ Before calling `submit_review`, include concise context fields so authors can va
 - `prior_feedback_resolution`: required when prior review comments are provided; 1-3 bullets summarizing which earlier feedback you agree/disagree with and why
 - `maintainability_assessment`: required single sentence: either summarize high-signal maintainability concerns found, or explicitly state none were found
 - `confidence_notes` (optional): assumptions, uncertainty, or follow-up caveats
-- `kb_question_closure` (required if any `query_knowledge_base` call returned no matches): one evidence-backed sentence explaining how those open questions were resolved (or why no durable answer was found)
+- `kb_question_closure` (required): for every `query_knowledge_base` call made, state the query, whether it returned matches, and how the result influenced (or did not influence) a finding. If a query returned no matches, include your evidence-backed conclusion for that open question.
 
 ### submit_review payload
 
@@ -331,7 +359,7 @@ Before calling `submit_review`, include concise context fields so authors can va
   "prior_feedback_resolution": ["<required when prior review comments exist: 1-3 concise bullets>"],
   "maintainability_assessment": "<required single sentence; either concerns found or explicitly none>",
   "confidence_notes": ["<optional bullets>"],
-  "kb_question_closure": "<required if any kb query had zero matches>"
+  "kb_question_closure": "<required: one sentence per KB query summarizing the query, match result, and whether it influenced a finding>"
 }
 ```
 
@@ -346,4 +374,4 @@ Before calling `submit_review`, include concise context fields so authors can va
 - The title must start with a priority tag: `[P0]`, `[P1]`, `[P2]`, or `[P3]`.
 - `overall_correctness` must be exactly `"patch is correct"` or `"patch is incorrect"`.
 
-Start your review by running `export GIT_PAGER=cat`, then `read AGENTS.md` (Step 1d Pass 1), then `{inspect_diff_cmd}` to get the risk-sorted entity map and verdict. Follow Phase 1 → Phase 2 → Phase 3 in order.
+Start your review by running `export GIT_PAGER=cat`, then `{inspect_diff_cmd}` (Step 1a), then `{pr_diff_cmd}` (Step 1b), then `query_knowledge_base` for each subsystem identified (Step 1c), then `read AGENTS.md` (Step 1d Pass 1). Follow Phase 1 → Phase 2 → Phase 3 in order. Do not read AGENTS.md before completing all KB queries.

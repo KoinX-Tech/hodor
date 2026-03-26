@@ -112,23 +112,6 @@ export async function upsertPoints(
   });
 }
 
-export async function updatePayload(
-  config: QdrantConfig,
-  collection: string,
-  pointId: string,
-  payload: Record<string, unknown>,
-): Promise<void> {
-  await qdrantFetch(
-    config,
-    `/collections/${collection}/points/payload`,
-    "POST",
-    {
-      payload,
-      points: [pointId],
-    },
-  );
-}
-
 export async function searchPoints(
   config: QdrantConfig,
   collection: string,

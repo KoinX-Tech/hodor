@@ -512,6 +512,8 @@ export async function reviewPr(opts: {
     let kbQueryCalls = 0;
     let kbNoMatchResponses = 0;
     let submitReviewCalls = 0;
+    let kbCurrentPrMatchReturned = false;
+
     const hasPriorReviewFeedback = Boolean(
       (mrMetadata?.reviewerSummaries?.length ?? 0) > 0 ||
       (mrMetadata?.inlineReviewComments?.length ?? 0) > 0,
@@ -612,6 +614,31 @@ export async function reviewPr(opts: {
           };
         }
 
+        // CHANGED: if any KB entry from this PR was returned during the session,
+        // require the agent to confirm it checked PR comments for contradictions.
+        if (
+          kbCurrentPrMatchReturned &&
+          (!candidate.confidence_notes ||
+            candidate.confidence_notes.length === 0)
+        ) {
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  "One or more KB entries retrieved during this review were sourced from " +
+                  "the current PR and may have been corrected by engineers in the PR conversation. " +
+                  "Add `confidence_notes` explaining whether you checked the PR comments for " +
+                  "contradictions, then call submit_review again.",
+              },
+            ],
+            details: {
+              ok: false,
+              reason: "missing confidence_notes after current-PR KB match",
+            },
+          };
+        }
+
         submittedReview = candidate;
         logger.info(
           `Received structured review via submit_review (${submittedReview.findings.length} finding(s))`,
@@ -632,7 +659,10 @@ export async function reviewPr(opts: {
       name: "query_knowledge_base",
       label: "Query Knowledge Base",
       description:
-        "Search persisted review learnings for architecture, call chains, and durable patterns.",
+        "Search runtime knowledge discovered from prior PR reviews: edge cases, " +
+        "observed failure modes, call-chain constraints, and behaviors that diverge " +
+        "from documentation. This source is complementary to AGENTS.md — it contains " +
+        "only what was found by reading actual code diffs, not what the team documented intentionally.",
       parameters: QUERY_KNOWLEDGE_BASE_SCHEMA,
       execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
         kbQueryCalls++;
@@ -691,14 +721,33 @@ export async function reviewPr(opts: {
             if (match.symbols.length > 0) {
               lines.push(`   symbols: ${match.symbols.join(", ")}`);
             }
+
+            // CHANGED: Warn when this learning was sourced from the current PR.
+            // This means it was extracted during a prior review of this same PR —
+            // the PR conversation may have since corrected or contradicted it.
+            // The agent should check PR comments before relying on this entry.
+            if (match.sourcePrs.includes(prUrl)) {
+              lines.push(
+                `   ⚠ This learning was extracted from the current PR. ` +
+                  `Check the PR conversation for corrections before relying on it.`,
+              );
+            }
             return lines.join("\n");
           })
           .join("\n\n");
+        const fallbackNote = result.pathSymbolFallback
+          ? `Note: no matches found for the specified paths/symbols; showing top results by semantic similarity instead.\n\n`
+          : "";
+
+        if (result.matches.some((m) => m.sourcePrs.includes(prUrl))) {
+          kbCurrentPrMatchReturned = true;
+        }
+
         return {
           content: [
             {
               type: "text",
-              text: `Matched prior learnings:\n\n${summary}`,
+              text: `${fallbackNote}Matched prior learnings:\n\n${summary}`,
             },
           ],
           details: { ok: true, matches: result.matches },
