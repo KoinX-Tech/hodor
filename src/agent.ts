@@ -1,7 +1,10 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
-import type { BashSpawnContext, BashSpawnHook } from "@mariozechner/pi-coding-agent";
+import type {
+  BashSpawnContext,
+  BashSpawnHook,
+} from "@mariozechner/pi-coding-agent";
 import { logger } from "./utils/logger.js";
 import { exec } from "./utils/exec.js";
 import { fetchGithubPrInfo, normalizeGithubMetadata } from "./github.js";
@@ -36,6 +39,7 @@ import type {
   RenderContext,
   ReviewOutput,
 } from "./types.js";
+import { isRtkCompatibleCommand } from "./rtk.js";
 
 export interface AgentProgressEvent {
   type:
@@ -67,74 +71,10 @@ async function checkRtkAvailable(): Promise<boolean> {
 }
 
 function createRtkSpawnHook(): BashSpawnHook {
-  // RTK-supported commands that provide token savings
-  // Based on: https://github.com/rtk-ai/rtk README
-  const supportedPrefixes = [
-    // Git
-    "git ",
-    // GitHub CLI
-    "gh ",
-    // Files (cat/head/tail are rewritten to rtk read, rg/grep to rtk grep)
-    "cat ",
-    "head ",
-    "tail ",
-    "rg ",
-    "grep ",
-    "ls ",
-    "find ",
-    // Rust/Cargo
-    "cargo ",
-    // Node/npm
-    "npm ",
-    "pnpm ",
-    "npx ",
-    // Testing
-    "vitest ",
-    "jest ",
-    "playwright ",
-    "pytest ",
-    "ruff ",
-    "go ",
-    "golangci-lint ",
-    "rake ",
-    "rspec ",
-    "rubocop ",
-    "bundle ",
-    // Lint/Build
-    "tsc ",
-    "eslint ",
-    "biome ",
-    "prettier ",
-    "next ",
-    "prisma ",
-    // Python
-    "pip ",
-    // Docker/K8s
-    "docker ",
-    "kubectl ",
-    // Network
-    "curl ",
-    "wget ",
-    // RTK native commands (if called directly)
-    "rtk ",
-  ];
-
-  // Shell builtins that should never be wrapped
-  const shellBuiltins = ["cd ", "export ", "source ", "alias ", "echo ", "printenv ", "pwd ", "mkdir ", "rm ", "cp ", "mv ", "touch ", "chmod ", "chown ", "kill ", "ps ", "env ", "set ", "unset ", "eval ", "exec ", "trap ", "wait ", "jobs ", "fg ", "bg ", "disown ", "type ", "which ", "hash ", "history ", "help ", "exit ", "return ", "break ", "continue ", "shift ", "getopts ", "ulimit ", "umask ", "times ", "caller ", "read ", "mapfile ", "readarray ", "shopt ", "builtin ", "command ", "enable ", "logout "];
-
   return (ctx: BashSpawnContext): BashSpawnContext => {
     const cmd = ctx.command;
 
-    // Skip shell builtins
-    if (shellBuiltins.some((builtin) => cmd.startsWith(builtin))) {
-      return ctx;
-    }
-
-    // Only wrap supported commands
-    const isSupported = supportedPrefixes.some((prefix) =>
-      cmd.startsWith(prefix),
-    );
-    if (!isSupported) {
+    if (!isRtkCompatibleCommand(cmd)) {
       return ctx;
     }
 
@@ -454,7 +394,9 @@ export async function reviewPr(opts: {
 
   const rtkAvailable = await checkRtkAvailable();
   if (rtkAvailable) {
-    logger.info("RTK preflight OK — bash commands will be wrapped for token savings");
+    logger.info(
+      "RTK preflight OK — bash commands will be wrapped for token savings",
+    );
   } else {
     logger.info("RTK not available — using standard bash execution");
   }
@@ -857,7 +799,10 @@ export async function reviewPr(opts: {
       thinkingLevel,
       tools: [
         createReadTool(workspacePath),
-        createBashTool(workspacePath, rtkAvailable ? { spawnHook: createRtkSpawnHook() } : undefined),
+        createBashTool(
+          workspacePath,
+          rtkAvailable ? { spawnHook: createRtkSpawnHook() } : undefined,
+        ),
         createGrepTool(workspacePath),
         createFindTool(workspacePath),
         createLsTool(workspacePath),

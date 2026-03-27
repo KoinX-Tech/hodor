@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { isRtkCompatibleCommand } from "../rtk";
 
 const execFileAsync = promisify(execFile);
 
@@ -13,7 +14,8 @@ export async function exec(
   args: string[],
   opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
 ): Promise<ExecResult> {
-  const { stdout, stderr } = await execFileAsync(cmd, args, {
+  const rtkCmd = isRtkCompatibleCommand(cmd) ? `rtk ${cmd}` : cmd;
+  const { stdout, stderr } = await execFileAsync(rtkCmd, args, {
     cwd: opts?.cwd,
     env: opts?.env ?? process.env,
     maxBuffer: 50 * 1024 * 1024, // 50MB
